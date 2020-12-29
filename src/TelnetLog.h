@@ -8,6 +8,8 @@
 #include <ESP8266WiFi.h>
 #include <WiFiUdp.h>
 
+#define USE_TEMPLATES 1
+
 class TelnetLog : public Print {
 public:
   TelnetLog(uint16_t port, uint8_t maxClients);
@@ -17,6 +19,7 @@ public:
   void update();
   size_t write(uint8_t c);
 
+#if defined(USE_TEMPLATES)
   // Wrapper for all write() variants in Print
   template <typename... Args>
   size_t write(Args&&... args) { // NOLINT
@@ -76,6 +79,7 @@ public:
     }
     return len;
   }
+  #endif
 
 protected:
     // Telnet definitions

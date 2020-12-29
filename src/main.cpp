@@ -22,7 +22,7 @@
 #define GOSUND_SP1 1
 #define MAXCIO 2
 // Set the device to be used
-#define DEVICETYPE MAXCIO
+#define DEVICETYPE GOSUND_SP1
 
 // Enable telnet server (port 23) for monitor outputs: 1=yes, 0=no
 #define TELNET_LOG 1
@@ -368,7 +368,7 @@ void setup() {
 #endif
   }
 #if TELNET_LOG == 1
-  LOGDEVICE = tl;
+  LOGDEVICE = &tl;
   MBUlogLvl = LOG_LEVEL_VERBOSE;
 #endif
 }
@@ -394,10 +394,9 @@ void updateEnergy() {
 
   // New read due?
   if ((millis() - last) > update_interval) {
-    tl.println("updateEnergy()");
     // Yes. Read pulse lengths. Note: current reading may take a long time (up to 2.5 seconds)
-    cf1 = pulseIn(CF1_PIN, LOW, 2500000);   // Read voltage or current
-    cf  = pulseIn(CF_PIN, LOW, 200000);     // Read power
+    cf1 = pulseIn(CF1_PIN, LOW, 1000000);   // Read voltage or current
+    cf  = pulseIn(CF_PIN, LOW, 1000000);     // Read power
 
     // Calculate watts according the BL 0937 specs
     //              Vref^2       cycle length       v-specs     resistors
@@ -449,20 +448,12 @@ void updateEnergy() {
 // Main loop
 // -----------------------------------------------------------------------------
 void loop() {
-  static uint32_t dot = millis();
-
   // Check for OTA update requests
   ArduinoOTA.handle();
 
 #if TELNET_LOG == 1
   // Handle telnet connections
   tl.update();
-  if (millis() - dot >= 2000) {
-    tl.printf("Mode=%s. Schalter=%d\n", mode == RUN ? "RUN" : "CONFIG", Testschalter ? 1 : 0);
-    // LOGDEVICE.printf("Mode=%s. Schalter=%d\n", mode == RUN ? "RUN" : "CONFIG", Testschalter ? 1 : 0);
-    // LOG_N("Mode=%s. Schalter=%d\n", mode == RUN ? "RUN" : "CONFIG", Testschalter ? 1 : 0);
-    dot = millis();
-  }
 #endif
 
   // Update blinking LED, if any
