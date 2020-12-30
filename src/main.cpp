@@ -28,7 +28,9 @@
 #define TELNET_LOG 1
 
 // Enable Modbus server for energy monitor (available with a GOSUND_SP1 device only!): 1=yes, 0=no
+#if DEVICETYPE == GOSUND_SP1
 #define MODBUS_SERVER 1
+#endif
 
 // Library includes
 #include <Arduino.h>
@@ -43,7 +45,7 @@
 #include "Logging.h"
 #endif
 #if MODBUS_SERVER == 1
-#include "ModbusMessage.h"
+#include "ModbusServerTCPasync.h"
 #endif
 
 // GPIO definitions
@@ -125,6 +127,7 @@ constexpr unsigned int ticksPerMinute = 60000 / update_interval;
 #endif
 
 #if MODBUS_SERVER == 1
+ModbusServerTCPasync MBserver;
 ModbusMessage Response;
 #endif
 
@@ -365,6 +368,10 @@ void setup() {
 
     tickCount = 0;
     accumulatedWatts = 0.0;
+
+#if MODBUS_SERVER == 1
+    // Init and start Modbus server
+#endif
 #endif
   }
 #if TELNET_LOG == 1
