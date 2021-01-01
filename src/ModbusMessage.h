@@ -9,6 +9,8 @@
 #include <type_traits>
 #include <vector>
 
+#undef NO_MOVE
+
 using Modbus::Error;
 using std::vector;
 
@@ -74,11 +76,13 @@ public:
   // Copy constructor
   ModbusMessage(const ModbusMessage& m);
 
+#ifndef NO_MOVE
   // Move constructor
 	ModbusMessage(ModbusMessage&& m);
   
 	// Move assignment
 	ModbusMessage& operator=(ModbusMessage&& m);
+#endif
 
   // Comparison operators
   bool operator==(const ModbusMessage& m);

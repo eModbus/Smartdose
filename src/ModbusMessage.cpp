@@ -33,6 +33,19 @@ ModbusMessage& ModbusMessage::operator=(const ModbusMessage& m) {
   return *this;
 }
 
+#ifndef NO_MOVE
+  // Move constructor
+ModbusMessage::ModbusMessage(ModbusMessage&& m) {
+  MM_data = std::move(m.MM_data);
+}
+  
+	// Move assignment
+ModbusMessage& ModbusMessage::operator=(ModbusMessage&& m) {
+  MM_data = std::move(m.MM_data);
+  return *this;
+}
+#endif
+
 // Copy constructor
 ModbusMessage::ModbusMessage(const ModbusMessage& m) :
   MM_data(m.MM_data) { }
@@ -281,24 +294,24 @@ Error ModbusMessage::checkData(uint8_t serverID, uint8_t functionCode) {
   if (returnCode == SUCCESS)
   {
     switch (functionCode) {
-    [[fallthrough]] case 0x01:
-    [[fallthrough]] case 0x02:
-    [[fallthrough]] case 0x03:
-    [[fallthrough]] case 0x04:
-    [[fallthrough]] case 0x05:
-    [[fallthrough]] case 0x06:
-    // [[fallthrough]] case 0x07:
-    [[fallthrough]] case 0x08:
-    // [[fallthrough]] case 0x0b:
-    // [[fallthrough]] case 0x0c:
-    [[fallthrough]] case 0x0f:
-    [[fallthrough]] case 0x10:
-    // [[fallthrough]] case 0x11:
-    [[fallthrough]] case 0x14:
-    [[fallthrough]] case 0x15:
-    [[fallthrough]] case 0x16:
-    [[fallthrough]] case 0x17:
-    [[fallthrough]] case 0x18:
+    case 0x01:
+    case 0x02:
+    case 0x03:
+    case 0x04:
+    case 0x05:
+    case 0x06:
+    // case 0x07:
+    case 0x08:
+    // case 0x0b:
+    // case 0x0c:
+    case 0x0f:
+    case 0x10:
+    // case 0x11:
+    case 0x14:
+    case 0x15:
+    case 0x16:
+    case 0x17:
+    case 0x18:
     case 0x2b:
       returnCode = PARAMETER_COUNT_ERROR;
       break;
@@ -317,24 +330,24 @@ Error ModbusMessage::checkData(uint8_t serverID, uint8_t functionCode, uint16_t 
   if (returnCode == SUCCESS)
   {
     switch (functionCode) {
-    [[fallthrough]] case 0x01:
-    [[fallthrough]] case 0x02:
-    [[fallthrough]] case 0x03:
-    [[fallthrough]] case 0x04:
-    [[fallthrough]] case 0x05:
-    [[fallthrough]] case 0x06:
-    [[fallthrough]] case 0x07:
-    [[fallthrough]] case 0x08:
-    [[fallthrough]] case 0x0b:
-    [[fallthrough]] case 0x0c:
-    [[fallthrough]] case 0x0f:
-    [[fallthrough]] case 0x10:
-    [[fallthrough]] case 0x11:
-    [[fallthrough]] case 0x14:
-    [[fallthrough]] case 0x15:
-    [[fallthrough]] case 0x16:
-    [[fallthrough]] case 0x17:
-    // [[fallthrough]] case 0x18:
+    case 0x01:
+    case 0x02:
+    case 0x03:
+    case 0x04:
+    case 0x05:
+    case 0x06:
+    case 0x07:
+    case 0x08:
+    case 0x0b:
+    case 0x0c:
+    case 0x0f:
+    case 0x10:
+    case 0x11:
+    case 0x14:
+    case 0x15:
+    case 0x16:
+    case 0x17:
+    // case 0x18:
     case 0x2b:
       returnCode = PARAMETER_COUNT_ERROR;
       break;
@@ -354,11 +367,11 @@ Error ModbusMessage::checkData(uint8_t serverID, uint8_t functionCode, uint16_t 
   if (returnCode == SUCCESS)
   {
     switch (functionCode) {
-    [[fallthrough]] case 0x01:
+    case 0x01:
     case 0x02:
       if ((p2 > 0x7d0) || (p2 == 0)) returnCode = PARAMETER_LIMIT_ERROR;
       break;
-    [[fallthrough]] case 0x03:
+    case 0x03:
     case 0x04:
       if ((p2 > 0x7d) || (p2 == 0)) returnCode = PARAMETER_LIMIT_ERROR;
       break;
@@ -366,18 +379,18 @@ Error ModbusMessage::checkData(uint8_t serverID, uint8_t functionCode, uint16_t 
       if ((p2 != 0) && (p2 != 0xff00)) returnCode = PARAMETER_LIMIT_ERROR;
       break;
     // case 0x06: all values are acceptable for p1 and p2
-    [[fallthrough]] case 0x07:
-    [[fallthrough]] case 0x08:
-    [[fallthrough]] case 0x0b:
-    [[fallthrough]] case 0x0c:
-    [[fallthrough]] case 0x0f:
-    [[fallthrough]] case 0x10:
-    [[fallthrough]] case 0x11:
-    [[fallthrough]] case 0x14:
-    [[fallthrough]] case 0x15:
-    [[fallthrough]] case 0x16:
-    [[fallthrough]] case 0x17:
-    [[fallthrough]] case 0x18:
+    case 0x07:
+    case 0x08:
+    case 0x0b:
+    case 0x0c:
+    case 0x0f:
+    case 0x10:
+    case 0x11:
+    case 0x14:
+    case 0x15:
+    case 0x16:
+    case 0x17:
+    case 0x18:
     case 0x2b:
       returnCode = PARAMETER_COUNT_ERROR;
       break;
@@ -396,24 +409,24 @@ Error ModbusMessage::checkData(uint8_t serverID, uint8_t functionCode, uint16_t 
   if (returnCode == SUCCESS)
   {
     switch (functionCode) {
-    [[fallthrough]] case 0x01:
-    [[fallthrough]] case 0x02:
-    [[fallthrough]] case 0x03:
-    [[fallthrough]] case 0x04:
-    [[fallthrough]] case 0x05:
-    [[fallthrough]] case 0x06:
-    [[fallthrough]] case 0x07:
-    [[fallthrough]] case 0x08:
-    [[fallthrough]] case 0x0b:
-    [[fallthrough]] case 0x0c:
-    [[fallthrough]] case 0x0f:
-    [[fallthrough]] case 0x10:
-    [[fallthrough]] case 0x11:
-    [[fallthrough]] case 0x14:
-    [[fallthrough]] case 0x15:
-    // [[fallthrough]] case 0x16:
-    [[fallthrough]] case 0x17:
-    [[fallthrough]] case 0x18:
+    case 0x01:
+    case 0x02:
+    case 0x03:
+    case 0x04:
+    case 0x05:
+    case 0x06:
+    case 0x07:
+    case 0x08:
+    case 0x0b:
+    case 0x0c:
+    case 0x0f:
+    case 0x10:
+    case 0x11:
+    case 0x14:
+    case 0x15:
+    // case 0x16:
+    case 0x17:
+    case 0x18:
     case 0x2b:
       returnCode = PARAMETER_COUNT_ERROR;
       break;
@@ -433,24 +446,24 @@ Error ModbusMessage::checkData(uint8_t serverID, uint8_t functionCode, uint16_t 
   if (returnCode == SUCCESS)
   {
     switch (functionCode) {
-    [[fallthrough]] case 0x01:
-    [[fallthrough]] case 0x02:
-    [[fallthrough]] case 0x03:
-    [[fallthrough]] case 0x04:
-    [[fallthrough]] case 0x05:
-    [[fallthrough]] case 0x06:
-    [[fallthrough]] case 0x07:
-    [[fallthrough]] case 0x08:
-    [[fallthrough]] case 0x0b:
-    [[fallthrough]] case 0x0c:
-    [[fallthrough]] case 0x0f:
-    // [[fallthrough]] case 0x10:
-    [[fallthrough]] case 0x11:
-    [[fallthrough]] case 0x14:
-    [[fallthrough]] case 0x15:
-    [[fallthrough]] case 0x16:
-    [[fallthrough]] case 0x17:
-    [[fallthrough]] case 0x18:
+    case 0x01:
+    case 0x02:
+    case 0x03:
+    case 0x04:
+    case 0x05:
+    case 0x06:
+    case 0x07:
+    case 0x08:
+    case 0x0b:
+    case 0x0c:
+    case 0x0f:
+    // case 0x10:
+    case 0x11:
+    case 0x14:
+    case 0x15:
+    case 0x16:
+    case 0x17:
+    case 0x18:
     case 0x2b:
       returnCode = PARAMETER_COUNT_ERROR;
       break;
@@ -473,24 +486,24 @@ Error ModbusMessage::checkData(uint8_t serverID, uint8_t functionCode, uint16_t 
   if (returnCode == SUCCESS)
   {
     switch (functionCode) {
-    [[fallthrough]] case 0x01:
-    [[fallthrough]] case 0x02:
-    [[fallthrough]] case 0x03:
-    [[fallthrough]] case 0x04:
-    [[fallthrough]] case 0x05:
-    [[fallthrough]] case 0x06:
-    [[fallthrough]] case 0x07:
-    [[fallthrough]] case 0x08:
-    [[fallthrough]] case 0x0b:
-    [[fallthrough]] case 0x0c:
-    // [[fallthrough]] case 0x0f:
-    [[fallthrough]] case 0x10:
-    [[fallthrough]] case 0x11:
-    [[fallthrough]] case 0x14:
-    [[fallthrough]] case 0x15:
-    [[fallthrough]] case 0x16:
-    [[fallthrough]] case 0x17:
-    [[fallthrough]] case 0x18:
+    case 0x01:
+    case 0x02:
+    case 0x03:
+    case 0x04:
+    case 0x05:
+    case 0x06:
+    case 0x07:
+    case 0x08:
+    case 0x0b:
+    case 0x0c:
+    // case 0x0f:
+    case 0x10:
+    case 0x11:
+    case 0x14:
+    case 0x15:
+    case 0x16:
+    case 0x17:
+    case 0x18:
     case 0x2b:
       returnCode = PARAMETER_COUNT_ERROR;
       break;
