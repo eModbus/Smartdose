@@ -147,6 +147,117 @@ uint16_t ModbusMessage::add(const uint8_t *arrayOfBytes, uint16_t count) {
   return MM_data.size();
 }
 
+// determineFloatOrder: calculate the sequence of bytes in a float value
+uint8_t ModbusMessage::determineFloatOrder() {
+  constexpr uint8_t floatSize = sizeof(float);
+  // Only do it if not done yet
+  if (floatOrder[0] == 0xFF) {
+    // We need to calculate it.
+    // This will only work for 32bit floats, so check that
+    if (floatSize != 4) {
+      // OOPS! we cannot proceed.
+      LOG_E("Oops. float seems to be %d bytes wide instead of 4.\n", floatSize);
+      return 0;
+    }
+
+    uint32_t i = 77230;                             // int value to go into a float without rounding error
+    float f = i;                                    // assign it
+    uint8_t *b = (uint8_t *)&f;                     // Pointer to bytes of f
+    uint8_t expect[floatSize] = { 0x47, 0x96, 0xd7, 0x00 }; // IEEE754 representation 
+    uint8_t matches = 0;                            // number of bytes successfully matched
+     
+    // Loop over the bytes of the expected sequence
+    for (uint8_t inx = 0; inx < floatSize; ++inx) {
+      // Loop over the real bytes of f
+      for (uint8_t trg = 0; trg < floatSize; ++trg) {
+        if (expect[inx] == b[trg]) {
+          floatOrder[inx] = trg;
+          matches++;
+          break;
+        }
+      }
+    }
+
+    // All bytes found?
+    if (matches != floatSize) {
+      // No! There is something fishy...
+      LOG_E("Unable to determine float byte order (matched=%d of %d)\n", matches, floatSize);
+      return 0;
+    }
+  }
+  return floatSize;
+}
+
+// determineDoubleOrder: calculate the sequence of bytes in a double value
+uint8_t ModbusMessage::determineDoubleOrder() {
+  constexpr uint8_t doubleSize = sizeof(double);
+  // Only do it if not done yet
+  if (doubleOrder[0] == 0xFF) {
+    // We need to calculate it.
+    // This will only work for 64bit doubles, so check that
+    if (doubleSize != 8) {
+      // OOPS! we cannot proceed.
+      LOG_E("Oops. double seems to be %d bytes wide instead of 8.\n", doubleSize);
+      return 0;
+    }
+
+    uint64_t i = 5791007487489389;                  // int64 value to go into a double without rounding error
+    double f = i;                                   // assign it
+    uint8_t *b = (uint8_t *)&f;                     // Pointer to bytes of f
+    uint8_t expect[doubleSize] = { 0x6D, 0xF5, 0x2E, 0x00, 0xE4, 0x92, 0x34, 0x43 }; // IEEE754 representation 
+    uint8_t matches = 0;                            // number of bytes successfully matched
+     
+    // Loop over the bytes of the expected sequence
+    for (uint8_t inx = 0; inx < doubleSize; ++inx) {
+      // Loop over the real bytes of f
+      for (uint8_t trg = 0; trg < doubleSize; ++trg) {
+        if (expect[inx] == b[trg]) {
+          floatOrder[inx] = trg;
+          matches++;
+          break;
+        }
+      }
+    }
+
+    // All bytes found?
+    if (matches != doubleSize) {
+      // No! There is something fishy...
+      LOG_E("Unable to determine double byte order (matched=%d of %d)\n", matches, doubleSize);
+      return 0;
+    }
+  }
+  return doubleSize;
+}
+
+// add() variants for float and double values
+// values will be added in IEEE754 byte sequence (MSB first)
+uint16_t ModbusMessage::add(float v) {
+  // First check if we need to determine byte order
+  if (determineFloatOrder()) {
+    // If we get here, the floatOrder is known
+    uint8_t *bytes = (uint8_t *)&v;
+    // Put out the bytes of v in floatOrder sequence
+    for (uint8_t i = 0; i < 4; ++i) {
+      MM_data.push_back(bytes[floatOrder[i]]);
+    }
+  }
+
+  return MM_data.size();
+}
+uint16_t ModbusMessage::add(double v) {
+  // First check if we need to determine byte order
+  if (determineDoubleOrder()) {
+    // If we get here, the doubleOrder is known
+    uint8_t *bytes = (uint8_t *)&v;
+    // Put out the bytes of v in doubleOrder sequence
+    for (uint8_t i = 0; i < 8; ++i) {
+      MM_data.push_back(bytes[doubleOrder[i]]);
+    }
+  }
+
+  return MM_data.size();
+}
+
 // Data validation methods for the different factory calls
 // 0. serverID and function code - used by all of the below
 Error ModbusMessage::checkServerFC(uint8_t serverID, uint8_t functionCode) {
@@ -540,3 +651,5 @@ void ModbusMessage::printError(const char *file, int lineNo, Error e) {
   LOG_E("(%s, line %d) Error in constructor: %02X - %s\n", file_name(file), lineNo, e, (const char *)(ModbusError(e)));
 }
 
+uint8_t ModbusMessage::floatOrder[] = { 0xFF };
+uint8_t ModbusMessage::doubleOrder[] = { 0xFF };

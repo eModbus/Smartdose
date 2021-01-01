@@ -107,10 +107,15 @@ void SetState(uint8_t device_id, const char * device_name, bool state, uint8_t v
 void wifiSetup();
 #if DEVICETYPE == GOSUND_SP1
 void updateEnergy();
+#if MODBUS_SERVER == 1
+ModbusMessage FC03(ModbusMessage request);
+ModbusMessage FC06(ModbusMessage request);
+#endif
 #endif
 
 fauxmoESP fauxmo;             // create Philips Hue lookalike
 bool Testschalter;            // Relay state
+uint8_t dimValue;             // Hue dimmer value
 ESP8266WebServer server(80);  // Web server on port 80
 uint8_t mode;                 // Operations mode, RUN or CONFIG
 
@@ -119,6 +124,14 @@ uint8_t mode;                 // Operations mode, RUN or CONFIG
 constexpr unsigned int update_interval = (UPDATE_TIME >= 2000) ? UPDATE_TIME : 2000;
 // Number of intervals since system boot
 unsigned long tickCount = 0;
+// Read energy values
+double volt = 0.0;                // Last read voltage value
+double amps = 0.0;                // Last read current value
+double watt = 0.0;                // Last read power value
+// Uptime values
+uint32_t hours = 0;
+uint16_t minutes = 0;
+uint16_t seconds = 0;
 // Spent Watt hours (Wh) since system boot
 double accumulatedWatts = 0.0;
 // Calculation helpers for hours and minutes since system boot
@@ -243,7 +256,88 @@ void SetState(uint8_t device_id, const char * device_name, bool state, uint8_t v
     digitalWrite(POWER_LED, HIGH);
     digitalWrite(RELAY, LOW);
   }
+  dimValue = value;
 }
+
+#if MODBUS_SERVER == 1
+// -----------------------------------------------------------------------------
+// FC03. React on Modbus read request
+// -----------------------------------------------------------------------------
+ModbusMessage FC03(ModbusMessage request) {
+  static constexpr uint16_t maxMemory = 
+    2 +                          // On/OFF state
+    sizeof(hours) +              // hours since boot
+    sizeof(minutes) +            // minutes ~
+    sizeof(seconds) +            // seconds ~
+    sizeof(watt) +               // W
+    sizeof(accumulatedWatts) +   // Wh
+    sizeof(volt) +               // V
+    sizeof(amps)                 // A
+    ; // NOLINT
+  static ModbusMessage memory(maxMemory); // Temporary data storage
+  ModbusMessage response;          // returned response message
+
+  uint16_t address = 0;
+  uint16_t words = 0;
+
+  // Get start address and length for read
+  request.get(2, address);
+  request.get(4, words);
+
+  // Valid?
+  if (address && words && ((address + words - 1) < (maxMemory / 2)) && (words < 126)) {
+    // Yes, both okay. Set up temporary memory
+    // Delete previous content
+    memory.clear();
+
+    // Fill in current values
+    memory.add((uint16_t)(Testschalter ? dimValue : 0));
+    memory.add(hours);
+    memory.add(minutes);
+    memory.add(seconds);
+    memory.add(watt);
+    memory.add(accumulatedWatts);
+    memory.add(volt);
+    memory.add(amps);
+    // set up response
+    response.add(request.getServerID(), request.getFunctionCode(), (uint8_t)(words * 2));
+    response.add(memory.data() + address - 1, words * 2);
+  } else {
+    // No, memory violation. Return error
+    response.setError(request.getServerID(), request.getFunctionCode(), ILLEGAL_DATA_ADDRESS);
+  }
+  return response;
+}
+
+// -----------------------------------------------------------------------------
+// FC06. Switch socket on or off 
+// -----------------------------------------------------------------------------
+ModbusMessage FC06(ModbusMessage request) {
+  ModbusMessage response;
+  uint16_t address = 0;
+  uint16_t value = 0;
+
+  request.get(2, address);
+  request.get(4, value);
+
+  // Address valid?
+  if (address == 1) {
+    // Yes. Data in valid range?
+    if (value < 256) {
+      // Yes. switch socket
+      SetState(0, DEVNAME, (value ? true : false), (uint8_t)value);
+      response = ECHO_RESPONSE;
+    } else {
+      // No, illegal data value
+      response.setError(request.getServerID(), request.getFunctionCode(), ILLEGAL_DATA_VALUE);
+    }
+  } else {
+    // No, memory violation. Return error
+    response.setError(request.getServerID(), request.getFunctionCode(), ILLEGAL_DATA_ADDRESS);
+  }
+  return response;
+}
+#endif
 
 // -----------------------------------------------------------------------------
 // Setup. Find out which mode to run and initialize objects
@@ -370,7 +464,12 @@ void setup() {
     accumulatedWatts = 0.0;
 
 #if MODBUS_SERVER == 1
-    // Init and start Modbus server
+    // Register server functions to read and write data
+    MBserver.registerWorker(1, READ_HOLD_REGISTER, &FC03);
+    MBserver.registerWorker(1, WRITE_HOLD_REGISTER, &FC06);
+    // Init and start Modbus server:
+    // Listen on port 502 (MODBUS standard), maximum 2 clients, 2s timeout
+    MBserver.start(502, 2, 2000);
 #endif
 #endif
   }
@@ -393,9 +492,6 @@ bool Debouncer(bool raw) {
 void updateEnergy() {
   static unsigned long last = millis();    // time of last read
   static bool select = false;              // Toggle for voltage/current
-  static double volt = 0.0;                // Last read voltage value
-  static double amps = 0.0;                // Last read current value
-  static double watt = 0.0;                // Last read power value
   unsigned long int cf;                    // CF read value (power pulse length)
   unsigned long int cf1;                   // CF1 read value (voltage/current pulse length)
 
@@ -430,11 +526,11 @@ void updateEnergy() {
       select = true;
     }
 
+    hours = tickCount / ticksPerHour;
+    minutes = (tickCount / ticksPerMinute) % 60;
+    seconds = ((tickCount * update_interval) / 1000) % 60;
 #if TELNET_LOG == 1
     // Write a data line to the telnet client(s), if any
-    unsigned int hours = tickCount / ticksPerHour;
-    unsigned int minutes = (tickCount / ticksPerMinute) % 60;
-    unsigned int seconds = ((tickCount * update_interval) / 1000) % 60;
     tl.printf("%06d:%02d:%02d %c %6.2fV %8.2fW %5.2fA %8.2fWh\n", 
       hours,
       minutes, 
