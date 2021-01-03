@@ -196,6 +196,8 @@ uint8_t ModbusMessage::determineFloatOrder() {
       // No! There is something fishy...
       LOG_E("Unable to determine float byte order (matched=%d of %d)\n", matches, floatSize);
       return 0;
+    } else {
+      HEXDUMP_V("floatOrder", floatOrder, floatSize);
     }
   }
   return floatSize;
@@ -217,7 +219,7 @@ uint8_t ModbusMessage::determineDoubleOrder() {
     uint64_t i = 5791007487489389;                  // int64 value to go into a double without rounding error
     double f = i;                                   // assign it
     uint8_t *b = (uint8_t *)&f;                     // Pointer to bytes of f
-    uint8_t expect[doubleSize] = { 0x6D, 0xF5, 0x2E, 0x00, 0xE4, 0x92, 0x34, 0x43 }; // IEEE754 representation 
+    uint8_t expect[doubleSize] = { 0x43, 0x34, 0x92, 0xE4, 0x00, 0x2E, 0xF5, 0x6D }; // IEEE754 representation 
     uint8_t matches = 0;                            // number of bytes successfully matched
      
     // Loop over the bytes of the expected sequence
@@ -225,7 +227,7 @@ uint8_t ModbusMessage::determineDoubleOrder() {
       // Loop over the real bytes of f
       for (uint8_t trg = 0; trg < doubleSize; ++trg) {
         if (expect[inx] == b[trg]) {
-          floatOrder[inx] = trg;
+          doubleOrder[inx] = trg;
           matches++;
           break;
         }
@@ -237,6 +239,8 @@ uint8_t ModbusMessage::determineDoubleOrder() {
       // No! There is something fishy...
       LOG_E("Unable to determine double byte order (matched=%d of %d)\n", matches, doubleSize);
       return 0;
+    } else {
+      HEXDUMP_V("doubleOrder", doubleOrder, doubleSize);
     }
   }
   return doubleSize;
@@ -257,6 +261,7 @@ uint16_t ModbusMessage::add(float v) {
 
   return MM_data.size();
 }
+
 uint16_t ModbusMessage::add(double v) {
   // First check if we need to determine byte order
   if (determineDoubleOrder()) {
@@ -269,6 +274,44 @@ uint16_t ModbusMessage::add(double v) {
   }
 
   return MM_data.size();
+}
+
+// get() variants for float and double values
+// values will be read in IEEE754 byte sequence (MSB first)
+uint16_t ModbusMessage::get(uint16_t index, float& v) {
+  // First check if we need to determine byte order
+  if (determineFloatOrder()) {
+    // If we get here, the floatOrder is known
+    // Will it fit?
+    if (index <= MM_data.size() - sizeof(float)) {
+      // Yes. Put out the bytes of v in floatOrder sequence
+      uint8_t *bytes = (uint8_t *)&v;
+      for (uint8_t i = 0; i < sizeof(float); ++i) {
+        bytes[i] = MM_data[index + floatOrder[i]];
+      }
+      index += sizeof(float);
+    }
+  }
+
+  return index;
+}
+
+uint16_t ModbusMessage::get(uint16_t index, double& v) {
+  // First check if we need to determine byte order
+  if (determineDoubleOrder()) {
+    // If we get here, the doubleOrder is known
+    // Will it fit?
+    if (index <= MM_data.size() - sizeof(double)) {
+      // Yes. Put out the bytes of v in doubleOrder sequence
+      uint8_t *bytes = (uint8_t *)&v;
+      for (uint8_t i = 0; i < sizeof(double); ++i) {
+        bytes[i] = MM_data[index + doubleOrder[i]];
+      }
+      index += sizeof(double);
+    }
+  }
+
+  return index;
 }
 
 // Data validation methods for the different factory calls

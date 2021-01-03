@@ -55,9 +55,11 @@ void ModbusServerTCPasync::mb_client::onData(uint8_t* data, size_t len) {
       LOG_D("max length error");
     }
     if (error != SUCCESS) {
-      ModbusMessage* response = new ModbusMessage(
+      ModbusMessage* response = new ModbusMessage;
+      response->setError(
         message->getServerID(),
-        message->getFunctionCode()
+        message->getFunctionCode(),
+        error
       );
       addResponseToOutbox(response);  // outbox has pointer ownership now
       // reset to starting values and process remaining data
@@ -118,7 +120,7 @@ void ModbusServerTCPasync::mb_client::onData(uint8_t* data, size_t len) {
       message->add(static_cast<uint16_t>(userData.size()));
       message->append(userData);
     } else {
-      userData.setError(request.getServerID(), request.getFunctionCode(), error);
+      message->setError(request.getServerID(), request.getFunctionCode(), error);
     }
     if (message->size() > 3) {
       addResponseToOutbox(message);
@@ -158,11 +160,13 @@ void ModbusServerTCPasync::mb_client::handleOutbox() {
     ModbusMessage* m = outbox.front();
     if (m->size() <= client->space()) {
       LOG_D("sending (%d)", m->size());
-      client->add(reinterpret_cast<const char*>(m->data()), m->size());
+      client->add(reinterpret_cast<const char*>(m->data()), m->size(), ASYNC_WRITE_FLAG_COPY);
       client->send();
       delete m;
       outbox.pop();
     } else {
+      LOG_D("Message too big (%d)!\n", m->size());
+      HEXDUMP_V("Message", m->data(), m->size());
       return;
     }
   }
@@ -193,7 +197,10 @@ uint16_t ModbusServerTCPasync::activeClients() {
 
 bool ModbusServerTCPasync::start(uint16_t port, uint8_t maxClients, uint32_t timeout, int coreID) {
   // don't restart if already running
-  if (server) return false;
+  if (server) {
+    LOG_W("Server is already started.\n");
+    return false;
+  }
   
   maxNoClients = maxClients;
   idle_timeout = timeout;
@@ -211,18 +218,26 @@ bool ModbusServerTCPasync::start(uint16_t port, uint8_t maxClients, uint32_t tim
 
 bool ModbusServerTCPasync::stop() {
   // stop server to prevent new clients connecting
-  server->end();
+  if (server) {
+    server->end();
+  }
 
   // now close existing clients
+  if (!clients.empty()) {
 #if defined(USE_MUTEX)
-  std::lock_guard<std::mutex> cntLock(m);
+    std::lock_guard<std::mutex> cntLock(m);
 #endif
-  while (!clients.empty()) {
-    // prevent onDisconnect handler to be called, resulting in deadlock
-    clients.front()->client->onDisconnect(nullptr, nullptr);
-    delete clients.front();
-    clients.pop_front();
+    while (!clients.empty()) {
+      // prevent onDisconnect handler to be called, resulting in deadlock
+      clients.front()->client->onDisconnect(nullptr, nullptr);
+      delete clients.front();
+      clients.pop_front();
+    }
   }
+
+  // Delete the server to be able to start a new, if required
+  delete server;
+  server = nullptr;
   LOG_D("modbus server stopped");
   return true;
 }

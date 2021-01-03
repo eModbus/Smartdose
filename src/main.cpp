@@ -243,14 +243,14 @@ void wifiSetup(const char *hostname) {
 void SetState(uint8_t device_id, const char * device_name, bool state, uint8_t value) {
   if (state) { // ON
 #if TELNET_LOG == 1
-    tl.print("Switch ON\n");
+    LOG_I("Switch ON\n");
 #endif
     Testschalter = true;
     digitalWrite(POWER_LED, LOW);
     digitalWrite(RELAY, HIGH);
   } else { // OFF
 #if TELNET_LOG == 1
-    tl.print("Switch OFF\n");
+    LOG_I("Switch OFF\n");
 #endif
     Testschalter = false;
     digitalWrite(POWER_LED, HIGH);
@@ -344,6 +344,10 @@ ModbusMessage FC06(ModbusMessage request) {
 // -----------------------------------------------------------------------------
 void setup() {
   File f;
+
+  Serial.begin(115200);
+  Serial.println();
+  Serial.println("_OK_");
 
   // Define GPIO input/output direction
   pinMode(SIGNAL_LED, OUTPUT);
@@ -476,6 +480,7 @@ void setup() {
 #if TELNET_LOG == 1
   LOGDEVICE = &tl;
   MBUlogLvl = LOG_LEVEL_VERBOSE;
+  LOG_V("setup() finished.\n");
 #endif
 }
 

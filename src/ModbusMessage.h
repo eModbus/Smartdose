@@ -161,6 +161,10 @@ template <typename T> uint16_t get(uint16_t index, T& retval) {
 uint16_t add(float v);
 uint16_t add(double v);
 
+// get() variants for float and double values
+uint16_t get(uint16_t index, float& v);
+uint16_t get(uint16_t index, double& v);
+
   // Message generation methods
   // 1. no additional parameter (FCs 0x07, 0x0b, 0x0c, 0x11)
   Error setMessage(uint8_t serverID, uint8_t functionCode);
