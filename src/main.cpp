@@ -480,6 +480,8 @@ void setup() {
 #if TELNET_LOG == 1
   LOGDEVICE = &tl;
   MBUlogLvl = LOG_LEVEL_VERBOSE;
+  delay(10000);
+  tl.update();
   LOG_V("setup() finished.\n");
 #endif
 }

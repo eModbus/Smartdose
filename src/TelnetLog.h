@@ -30,6 +30,7 @@ public:
       if (TL_Client[i] || TL_Client[i].connected()) {
         // Yes. print out line
         len = TL_Client[i].write(std::forward<Args>(args) ...);
+        TL_Client[i].flush();
       }
     }
     return len;
@@ -45,6 +46,7 @@ public:
       if (TL_Client[i] || TL_Client[i].connected()) {
         // Yes. print out line
         len = TL_Client[i].print(std::forward<Args>(args) ...);
+        TL_Client[i].flush();
       }
     }
     return len;
@@ -60,6 +62,7 @@ public:
       if (TL_Client[i] || TL_Client[i].connected()) {
         // Yes. print out line
         len = TL_Client[i].println(std::forward<Args>(args) ...);
+        TL_Client[i].flush();
       }
     }
     return len;
@@ -75,6 +78,7 @@ public:
       if (TL_Client[i] || TL_Client[i].connected()) {
         // Yes. print out line
         len = TL_Client[i].printf(std::forward<Args>(args) ...);
+        TL_Client[i].flush();
       }
     }
     return len;

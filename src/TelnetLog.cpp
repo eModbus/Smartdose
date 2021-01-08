@@ -42,6 +42,7 @@ size_t TelnetLog::write(uint8_t c) {
     if (TL_Client[i] || TL_Client[i].connected()) {
       // Yes. print out line
       len = TL_Client[i].write(c);
+      TL_Client[i].flush();
     }
   }
   return len;
