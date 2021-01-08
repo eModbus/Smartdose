@@ -36,7 +36,6 @@ void TelnetLog::end() {
 
 size_t TelnetLog::write(uint8_t c) {
     size_t len = 0;
-    usedTemplate = 5;
   // Loop over clients
   for (uint8_t i = 0; i < TL_maxClients; ++i) {
     // Is it active?

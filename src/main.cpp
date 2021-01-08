@@ -536,8 +536,7 @@ void updateEnergy() {
     seconds = ((tickCount * update_interval) / 1000) % 60;
 #if TELNET_LOG == 1
     // Write a data line to the telnet client(s), if any
-    tl.printf("%d - %06d:%02d:%02d %c %6.2fV %8.2fW %5.2fA %8.2fWh\n", 
-      (unsigned int)tl.usedTemplate,
+    tl.printf("%06d:%02d:%02d %c %6.2fV %8.2fW %5.2fA %8.2fWh\n", 
       hours,
       minutes, 
       seconds,
