@@ -42,6 +42,7 @@
 #if TELNET_LOG == 1
 #include "TelnetLog.h"
 #define LOCAL_LOG_LEVEL LOG_LEVEL_VERBOSE
+#define LOGDEVICE tl
 #include "Logging.h"
 #endif
 #if MODBUS_SERVER == 1
@@ -295,13 +296,13 @@ ModbusMessage FC03(ModbusMessage request) {
     memory.add(hours);
     memory.add(minutes);
     memory.add(seconds);
-    memory.add(watt);
-    memory.add(accumulatedWatts);
-    memory.add(volt);
-    memory.add(amps);
+    memory.add((float)watt);
+    memory.add((float)accumulatedWatts);
+    memory.add((float)volt);
+    memory.add((float)amps);
     // set up response
     response.add(request.getServerID(), request.getFunctionCode(), (uint8_t)(words * 2));
-    response.add(memory.data() + address - 1, words * 2);
+    response.add(memory.data() + (address - 1) * 2, words * 2);
   } else {
     // No, memory violation. Return error
     response.setError(request.getServerID(), request.getFunctionCode(), ILLEGAL_DATA_ADDRESS);
@@ -359,11 +360,6 @@ void setup() {
   digitalWrite(RELAY, LOW);        // Relay OFF
   digitalWrite(SIGNAL_LED, HIGH);  // LED OFF
   digitalWrite(POWER_LED, HIGH);   // LED OFF
-
-#if TELNET_LOG == 1
-  // Init telnet server
-  tl.begin();
-#endif
 
   // Open LittleFS.
   bool rc = LittleFS.begin();
@@ -478,12 +474,14 @@ void setup() {
 #endif
   }
 #if TELNET_LOG == 1
-  LOGDEVICE = &tl;
+  // Init telnet server
   MBUlogLvl = LOG_LEVEL_VERBOSE;
   delay(10000);
+  tl.begin();
   tl.update();
-  LOG_V("setup() finished.\n");
 #endif
+
+  LOG_V("setup() finished.\n");
 }
 
 // -----------------------------------------------------------------------------
@@ -538,7 +536,8 @@ void updateEnergy() {
     seconds = ((tickCount * update_interval) / 1000) % 60;
 #if TELNET_LOG == 1
     // Write a data line to the telnet client(s), if any
-    tl.printf("%06d:%02d:%02d %c %6.2fV %8.2fW %5.2fA %8.2fWh\n", 
+    tl.printf("%d - %06d:%02d:%02d %c %6.2fV %8.2fW %5.2fA %8.2fWh\n", 
+      (unsigned int)tl.usedTemplate,
       hours,
       minutes, 
       seconds,
