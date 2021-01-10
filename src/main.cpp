@@ -22,7 +22,9 @@
 #define GOSUND_SP1 1
 #define MAXCIO 2
 // Set the device to be used
+#ifndef DEVICETYPE
 #define DEVICETYPE MAXCIO
+#endif
 
 // Enable telnet server (port 23) for monitor outputs: 1=yes, 0=no
 #define TELNET_LOG 1
