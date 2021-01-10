@@ -638,7 +638,13 @@ void loop() {
       upTime.count();
       stateTime.count();
       // onTime only counted for switch state == ON
-      if (Testschalter) { onTime.count(); }
+      // GOSUND_SP1 devices additionally will watch current to state ON
+      if (Testschalter) { 
+#if DEVICETYPE == GOSUND_SP1
+        if (amps > 0.0)
+#endif
+        onTime.count(); 
+      }
 
 #if TELNET_LOG == 1
     // Write data to the telnet client(s), if any
