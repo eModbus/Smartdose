@@ -549,7 +549,6 @@ void setup() {
 #if TELNET_LOG == 1
   // Init telnet server
   MBUlogLvl = LOG_LEVEL_VERBOSE;
-  delay(10000);
   tl.begin();
   tl.update();
 #endif
