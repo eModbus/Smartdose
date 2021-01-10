@@ -22,15 +22,13 @@
 #define GOSUND_SP1 1
 #define MAXCIO 2
 // Set the device to be used
-#define DEVICETYPE GOSUND_SP1
+#define DEVICETYPE MAXCIO
 
 // Enable telnet server (port 23) for monitor outputs: 1=yes, 0=no
 #define TELNET_LOG 1
 
-// Enable Modbus server for energy monitor (available with a GOSUND_SP1 device only!): 1=yes, 0=no
-#if DEVICETYPE == GOSUND_SP1
+// Enable Modbus server for monitoring runtime data (energy values available with a GOSUND_SP1 device only!): 1=yes, 0=no
 #define MODBUS_SERVER 1
-#endif
 
 // Library includes
 #include <Arduino.h>
@@ -41,8 +39,8 @@
 #include "LittleFS.h"
 #if TELNET_LOG == 1
 #include "TelnetLog.h"
-#define LOCAL_LOG_LEVEL LOG_LEVEL_VERBOSE
 #define LOGDEVICE tl
+#define LOCAL_LOG_LEVEL LOG_LEVEL_VERBOSE
 #include "Logging.h"
 #endif
 #if MODBUS_SERVER == 1
@@ -57,12 +55,14 @@
 #define BUTTON 3
 #define SIGNAL_LED RED_LED
 #define POWER_LED BLUE_LED
+#define MAXWORD 15
+
 // Energy monitor GPIOs
 #define SEL_PIN 12
 #define CF_PIN 4
 #define CF1_PIN 5 
+
 // Energy monitor settings
-#define UPDATE_TIME 5000
 #define HIGH_PULSE 38
 #endif
 #if DEVICETYPE == MAXCIO
@@ -72,7 +72,11 @@
 #define BUTTON 1
 #define SIGNAL_LED LED
 #define POWER_LED LED
+#define MAXWORD 7
 #endif
+
+// Time between (energy) monitor updates in ms
+#define UPDATE_TIME 5000
 
 // ================= No user definable values below this line ===================
 
@@ -108,10 +112,10 @@ void SetState(uint8_t device_id, const char * device_name, bool state, uint8_t v
 void wifiSetup();
 #if DEVICETYPE == GOSUND_SP1
 void updateEnergy();
+#endif
 #if MODBUS_SERVER == 1
 ModbusMessage FC03(ModbusMessage request);
 ModbusMessage FC06(ModbusMessage request);
-#endif
 #endif
 
 fauxmoESP fauxmo;             // create Philips Hue lookalike
@@ -119,25 +123,55 @@ bool Testschalter;            // Relay state
 uint8_t dimValue;             // Hue dimmer value
 ESP8266WebServer server(80);  // Web server on port 80
 uint8_t mode;                 // Operations mode, RUN or CONFIG
+IPAddress myIP;               // local IP address
 
-#if DEVICETYPE == GOSUND_SP1
-// Time between reads of the energy monitor im milliseconds
+// TimeCount: class to hold time passed
+class TimeCount {
+public:
+  TimeCount() : interval_(0), counter_(0) { }
+  void start(uint32_t interval) {
+    interval_ = interval;
+    ticksPerHour_ = 3600000 / interval;
+    ticksPerMinute_ = 60000 / interval;
+  }
+  void count() {
+    if (interval_) counter_++;
+  }
+  uint16_t getHour() {
+    return interval_ ? (uint16_t)(counter_ / ticksPerHour_) : 0;
+  }
+  uint8_t getMinute() {
+    return interval_ ? (uint8_t)((counter_ / ticksPerMinute_) % 60) : 0;
+  }
+  uint8_t getSecond() {
+    return interval_ ? (uint8_t)(((counter_ * interval_) / 1000) % 60) : 0;
+  }
+  void reset() {
+    counter_ = 0;
+  }
+protected:
+  uint32_t interval_;
+  uint32_t counter_;
+  uint32_t ticksPerHour_;
+  uint32_t ticksPerMinute_;
+};
+
+// Time between reads of the runtime data monitor im milliseconds
 constexpr unsigned int update_interval = (UPDATE_TIME >= 2000) ? UPDATE_TIME : 2000;
 // Number of intervals since system boot
 unsigned long tickCount = 0;
+// Time counters
+TimeCount upTime;
+TimeCount stateTime;
+TimeCount onTime;
+
+#if DEVICETYPE == GOSUND_SP1
 // Read energy values
 double volt = 0.0;                // Last read voltage value
 double amps = 0.0;                // Last read current value
 double watt = 0.0;                // Last read power value
-// Uptime values
-uint32_t hours = 0;
-uint16_t minutes = 0;
-uint16_t seconds = 0;
 // Spent Watt hours (Wh) since system boot
 double accumulatedWatts = 0.0;
-// Calculation helpers for hours and minutes since system boot
-constexpr unsigned int ticksPerHour = 3600000 / update_interval;
-constexpr unsigned int ticksPerMinute = 60000 / update_interval;
 #endif
 
 #if MODBUS_SERVER == 1
@@ -234,6 +268,8 @@ void wifiSetup(const char *hostname) {
     delay(50);
   }
 
+  myIP = WiFi.localIP();
+
   // Connected! Stop blinking
   SignalLed.stop();
 }
@@ -257,6 +293,7 @@ void SetState(uint8_t device_id, const char * device_name, bool state, uint8_t v
     digitalWrite(POWER_LED, HIGH);
     digitalWrite(RELAY, LOW);
   }
+  stateTime.reset();
   dimValue = value;
 }
 
@@ -266,14 +303,23 @@ void SetState(uint8_t device_id, const char * device_name, bool state, uint8_t v
 // -----------------------------------------------------------------------------
 ModbusMessage FC03(ModbusMessage request) {
   static constexpr uint16_t maxMemory = 
-    2 +                          // On/OFF state
-    sizeof(hours) +              // hours since boot
-    sizeof(minutes) +            // minutes ~
-    sizeof(seconds) +            // seconds ~
-    sizeof(watt) +               // W
-    sizeof(accumulatedWatts) +   // Wh
-    sizeof(volt) +               // V
-    sizeof(amps)                 // A
+    2                            // On/OFF state
+    + 2                          // hours since boot
+    + 1                          // minutes ~
+    + 1                          // seconds ~
+    + 2                          // hours in current state (ON/OFF)
+    + 1                          // minutes ~
+    + 1                          // seconds ~
+    + 2                          // ON hours since boot
+    + 1                          // minutes ~
+    + 1                          // seconds ~
+    // Following only for GOSUND_SP1
+#if DEVICETYPE == GOSUND_SP1
+    + 4                          // Wh
+    + 4                          // W
+    + 4                          // V
+    + 4                          // A
+#endif
     ; // NOLINT
   static ModbusMessage memory(maxMemory); // Temporary data storage
   ModbusMessage response;          // returned response message
@@ -286,20 +332,29 @@ ModbusMessage FC03(ModbusMessage request) {
   request.get(4, words);
 
   // Valid?
-  if (address && words && ((address + words - 1) < (maxMemory / 2)) && (words < 126)) {
+  if (address && words && ((address + words - 1) <= MAXWORD) && (words < 126)) {
     // Yes, both okay. Set up temporary memory
     // Delete previous content
     memory.clear();
 
     // Fill in current values
     memory.add((uint16_t)(Testschalter ? dimValue : 0));
-    memory.add(hours);
-    memory.add(minutes);
-    memory.add(seconds);
-    memory.add((float)watt);
+    memory.add(upTime.getHour());
+    memory.add(upTime.getMinute());
+    memory.add(upTime.getSecond());
+    memory.add(stateTime.getHour());
+    memory.add(stateTime.getMinute());
+    memory.add(stateTime.getSecond());
+    memory.add(onTime.getHour());
+    memory.add(onTime.getMinute());
+    memory.add(onTime.getSecond());
+    // Following only for GOSUND_SP1
+#if DEVICETYPE == GOSUND_SP1
     memory.add((float)accumulatedWatts);
+    memory.add((float)watt);
     memory.add((float)volt);
     memory.add((float)amps);
+#endif
     // set up response
     response.add(request.getServerID(), request.getFunctionCode(), (uint8_t)(words * 2));
     response.add(memory.data() + (address - 1) * 2, words * 2);
@@ -332,6 +387,19 @@ ModbusMessage FC06(ModbusMessage request) {
       // No, illegal data value
       response.setError(request.getServerID(), request.getFunctionCode(), ILLEGAL_DATA_VALUE);
     }
+#if DEVICETYPE == GOSUND_SP1
+  // On the GOSUND_SP1 we may reset the accumulated power consumption
+  } else if (address == 8) {
+    // Value is zero?
+    if (value == 0) {
+      // Yes. Reset the counter
+      accumulatedWatts = 0.0;
+      response = ECHO_RESPONSE;
+    } else {
+      // No, illegal data value
+      response.setError(request.getServerID(), request.getFunctionCode(), ILLEGAL_DATA_VALUE);
+    }
+#endif
   } else {
     // No, memory violation. Return error
     response.setError(request.getServerID(), request.getFunctionCode(), ILLEGAL_DATA_ADDRESS);
@@ -460,8 +528,8 @@ void setup() {
     pinMode(CF1_PIN, INPUT);
     pinMode(SEL_PIN, OUTPUT);
 
-    tickCount = 0;
     accumulatedWatts = 0.0;
+#endif
 
 #if MODBUS_SERVER == 1
     // Register server functions to read and write data
@@ -471,7 +539,10 @@ void setup() {
     // Listen on port 502 (MODBUS standard), maximum 2 clients, 2s timeout
     MBserver.start(502, 2, 2000);
 #endif
-#endif
+    
+    upTime.start(update_interval);
+    stateTime.start(update_interval);
+    onTime.start(update_interval);
   }
 #if TELNET_LOG == 1
   // Init telnet server
@@ -495,59 +566,36 @@ bool Debouncer(bool raw) {
 
 #if DEVICETYPE == GOSUND_SP1
 void updateEnergy() {
-  static unsigned long last = millis();    // time of last read
   static bool select = false;              // Toggle for voltage/current
   unsigned long int cf;                    // CF read value (power pulse length)
   unsigned long int cf1;                   // CF1 read value (voltage/current pulse length)
 
-  // New read due?
-  if ((millis() - last) > update_interval) {
-    // Yes. Read pulse lengths. Note: current reading may take a long time (up to 2.5 seconds)
-    cf1 = pulseIn(CF1_PIN, LOW, 1000000);   // Read voltage or current
-    cf  = pulseIn(CF_PIN, LOW, 1000000);     // Read power
+  // Read pulse lengths. Note: current reading may take a long time (up to 2.5 seconds)
+  cf1 = pulseIn(CF1_PIN, LOW, 1000000);   // Read voltage or current
+  cf  = pulseIn(CF_PIN, LOW, 1000000);     // Read power
 
-    // Calculate watts according the BL 0937 specs
-    //              Vref^2       cycle length       v-specs     resistors
-    // watt = cf ? (1483524.0 / (cf + HIGH_PULSE) / 1721506.0 * 2001000.0) : 0.0;
-    watt = cf ? (1724380.585/(cf + HIGH_PULSE)) : 0.0;
-    accumulatedWatts += watt * (millis() - last) / 3600000.0;
+  // Calculate watts according the BL 0937 specs
+  //              Vref^2       cycle length       v-specs     resistors
+  // watt = cf ? (1483524.0 / (cf + HIGH_PULSE) / 1721506.0 * 2001000.0) : 0.0;
+  watt = cf ? (1724380.585/(cf + HIGH_PULSE)) : 0.0;
 
-    // Did we read current?
-    if (select) {
-      // Yes. Calculate amps according to specs
-      //               Vref         cycle length        v-specs   shunt
-      // amps = cf1 ? (1218000.0 / (cf1 + HIGH_PULSE) / 94638.0 * 1000.0) : 0.0;
-      amps = cf1 ? (12870.0/(cf1 + HIGH_PULSE)) : 0.0;
-      // Toggle SEL pin to read the other value next time around
-      digitalWrite(SEL_PIN, HIGH);
-      select = false;
-    } else {
-      // No. Calculate volts according to specs
-      //               Vref         cycle length        v-specs   resistors
-      // volt = cf1 ? (1218000.0 / (cf1 + HIGH_PULSE) / 15397.0 * 2001.0) : 0.0;
-      volt = cf1 ? (158299.656/(cf1 + HIGH_PULSE)) : 0.0;
-      // Toggle SEL pin to read the other value next time around
-      digitalWrite(SEL_PIN, LOW);
-      select = true;
-    }
-
-    hours = tickCount / ticksPerHour;
-    minutes = (tickCount / ticksPerMinute) % 60;
-    seconds = ((tickCount * update_interval) / 1000) % 60;
-#if TELNET_LOG == 1
-    // Write a data line to the telnet client(s), if any
-    tl.printf("%06d:%02d:%02d %c %6.2fV %8.2fW %5.2fA %8.2fWh\n", 
-      hours,
-      minutes, 
-      seconds,
-      select ? 'V' : 'A', 
-      volt, 
-      watt, 
-      amps, 
-      accumulatedWatts); 
-#endif
-    tickCount++;
-    last = millis();
+  // Did we read current?
+  if (select) {
+    // Yes. Calculate amps according to specs
+    //               Vref         cycle length        v-specs   shunt
+    // amps = cf1 ? (1218000.0 / (cf1 + HIGH_PULSE) / 94638.0 * 1000.0) : 0.0;
+    amps = cf1 ? (12870.0/(cf1 + HIGH_PULSE)) : 0.0;
+    // Toggle SEL pin to read the other value next time around
+    digitalWrite(SEL_PIN, HIGH);
+    select = false;
+  } else {
+    // No. Calculate volts according to specs
+    //               Vref         cycle length        v-specs   resistors
+    // volt = cf1 ? (1218000.0 / (cf1 + HIGH_PULSE) / 15397.0 * 2001.0) : 0.0;
+    volt = cf1 ? (158299.656/(cf1 + HIGH_PULSE)) : 0.0;
+    // Toggle SEL pin to read the other value next time around
+    digitalWrite(SEL_PIN, LOW);
+    select = true;
   }
 }
 #endif 
@@ -556,6 +604,7 @@ void updateEnergy() {
 // Main loop
 // -----------------------------------------------------------------------------
 void loop() {
+  static uint32_t last = millis();
   // Check for OTA update requests
   ArduinoOTA.handle();
 
@@ -577,11 +626,42 @@ void loop() {
       SetState(0, DEVNAME, !Testschalter, 255);
     }
 
+    // New read due?
+    if ((millis() - last) > update_interval) {
 #if DEVICETYPE == GOSUND_SP1
-    // Read energy meter.
-    updateEnergy();
+      // Read energy meter.
+      updateEnergy();
+      accumulatedWatts += watt * (millis() - last) / 3600000.0;
 #endif
+      // Count up timers
+      upTime.count();
+      stateTime.count();
+      // onTime only counted for switch state == ON
+      if (Testschalter) { onTime.count(); }
 
+#if TELNET_LOG == 1
+    // Write data to the telnet client(s), if any
+    tl.printf("%3s for %5d:%02d:%02d   Run time %5d:%02d:%02d    ON time %5d:%02d:%02d\n",
+      Testschalter ? "ON" : "OFF",
+      stateTime.getHour(),
+      stateTime.getMinute(),
+      stateTime.getSecond(),
+      upTime.getHour(),
+      upTime.getMinute(),
+      upTime.getSecond(),
+      onTime.getHour(),
+      onTime.getMinute(),
+      onTime.getSecond());
+#if DEVICETYPE == GOSUND_SP1
+    tl.printf("   | %6.2f V| %8.2f W| %5.2f A| %8.2f Wh|\n", 
+      volt, 
+      watt, 
+      amps, 
+      accumulatedWatts); 
+#endif
+#endif
+      last = millis();
+    }
   } else {
     // NO. CONFIG mode - listen to web requests only.
     server.handleClient();

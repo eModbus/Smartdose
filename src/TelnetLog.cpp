@@ -80,6 +80,9 @@ void TelnetLog::update() {
         
         TL_Client[i].print("Free Heap RAM: ");
         TL_Client[i].println(ESP.getFreeHeap());
+
+        TL_Client[i].print("Server IP: ");
+        TL_Client[i].println(WiFi.localIP());
   
         TL_Client[i].println("----------------------------------------------------------------");
         
