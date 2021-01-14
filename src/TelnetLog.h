@@ -17,6 +17,7 @@ public:
   void begin();
   void end();
   void update();
+  inline bool isActive() { return telnetActive; };
   size_t write(uint8_t c);
 
 #if defined(USE_TEMPLATES)
@@ -91,5 +92,6 @@ protected:
     uint8_t TL_maxClients;
     WiFiServer *TL_Server;
     WiFiClient *TL_Client;
+    bool telnetActive;
 };
 

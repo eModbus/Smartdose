@@ -113,7 +113,9 @@ bool Debouncer(bool raw);
 void SetState(uint8_t device_id, const char * device_name, bool state, uint8_t value);
 void wifiSetup();
 #if DEVICETYPE == GOSUND_SP1
+unsigned long int getFrequency();
 void updateEnergy();
+unsigned long int highPulse = HIGH_PULSE;
 #endif
 #if MODBUS_SERVER == 1
 ModbusMessage FC03(ModbusMessage request);
@@ -174,6 +176,8 @@ double amps = 0.0;                // Last read current value
 double watt = 0.0;                // Last read power value
 // Spent Watt hours (Wh) since system boot
 double accumulatedWatts = 0.0;
+volatile unsigned long int tick = 0;
+void ICACHE_RAM_ATTR cntTick() { tick++; }
 #endif
 
 #if MODBUS_SERVER == 1
@@ -526,11 +530,15 @@ void setup() {
 
 #if DEVICETYPE == GOSUND_SP1
     // Configure energy meter GPIOs
-    pinMode(CF_PIN, INPUT);
-    pinMode(CF1_PIN, INPUT);
+    pinMode(CF_PIN, INPUT_PULLUP);
+    pinMode(CF1_PIN, INPUT_PULLUP);
     pinMode(SEL_PIN, OUTPUT);
+    digitalWrite(SEL_PIN, HIGH);
 
     accumulatedWatts = 0.0;
+
+    attachInterrupt(digitalPinToInterrupt(CF1_PIN), cntTick, RISING);
+
 #endif
 
 #if MODBUS_SERVER == 1
@@ -566,34 +574,70 @@ bool Debouncer(bool raw) {
 }
 
 #if DEVICETYPE == GOSUND_SP1
+unsigned long int getFrequency() {
+  unsigned long int pls = 0;
+
+/* 
+  uint8_t cnt = 0;
+  const uint8_t repeats(20);
+  unsigned long int tmp = 0;
+  for (uint8_t i = 0; i < repeats; ++i) {
+    pls = pulseIn(CF_PIN, HIGH, 1000000);
+    if (pls) {
+      tmp += pls;
+      cnt++;
+    }
+  }
+  if (cnt) {
+    return (unsigned long int)(tmp / cnt);
+  } else {
+    return 0;
+  }
+  */
+
+  cli();
+  tick = 0;
+  sei();
+  // count for 1000 msec
+  delay(1000);
+  cli();
+  pls = tick;
+  sei();
+  return pls;
+}
+
 void updateEnergy() {
   static bool select = false;              // Toggle for voltage/current
   unsigned long int cf;                    // CF read value (power pulse length)
   unsigned long int cf1;                   // CF1 read value (voltage/current pulse length)
 
   // Read pulse lengths. Note: current reading may take a long time (up to 2.5 seconds)
-  cf1 = pulseIn(CF1_PIN, LOW, 1000000);   // Read voltage or current
+  // cf1 = pulseIn(CF1_PIN, LOW, 1000000);   // Read voltage or current
+  cf1 = getFrequency();
   cf  = pulseIn(CF_PIN, LOW, 1000000);     // Read power
+
 
   // Calculate watts according the BL 0937 specs
   //              Vref^2       cycle length       v-specs     resistors
-  // watt = cf ? (1483524.0 / (cf + HIGH_PULSE) / 1721506.0 * 2001000.0) : 0.0;
-  watt = cf ? (1724380.585/(cf + HIGH_PULSE)) : 0.0;
+  // watt = cf ? (1483524.0 / (cf + highPulse) / 1721506.0 * 2001000.0) : 0.0;
+  watt = cf ? (1724380.585/(cf + highPulse)) : 0.0;
 
   // Did we read current?
   if (select) {
     // Yes. Calculate amps according to specs
     //               Vref         cycle length        v-specs   shunt
-    // amps = cf1 ? (1218000.0 / (cf1 + HIGH_PULSE) / 94638.0 * 1000.0) : 0.0;
-    amps = cf1 ? (12870.0/(cf1 + HIGH_PULSE)) : 0.0;
+    // amps = cf1 ? (1218000.0 / (cf1 + highPulse) / 94638.0 * 1000.0) : 0.0;
+    // amps = cf1 ? (12870.0/(cf1 + highPulse)) : 0.0;
+    amps = (cf1 * 1.218) / 94638.0 * 1000.0;
     // Toggle SEL pin to read the other value next time around
     digitalWrite(SEL_PIN, HIGH);
     select = false;
   } else {
     // No. Calculate volts according to specs
     //               Vref         cycle length        v-specs   resistors
-    // volt = cf1 ? (1218000.0 / (cf1 + HIGH_PULSE) / 15397.0 * 2001.0) : 0.0;
-    volt = cf1 ? (158299.656/(cf1 + HIGH_PULSE)) : 0.0;
+    // volt = cf1 ? (1218000.0 / (cf1 + highPulse) / 15397.0 * 2001.0) : 0.0;
+    // volt = cf1 ? (158299.656/(cf1 + highPulse)) : 0.0;
+    volt = (cf1 * 1.218) / 15397.0 * 2001.0;
     // Toggle SEL pin to read the other value next time around
     digitalWrite(SEL_PIN, LOW);
     select = true;
@@ -629,6 +673,7 @@ void loop() {
 
     // New read due?
     if ((millis() - last) > update_interval) {
+      last = millis();
 #if DEVICETYPE == GOSUND_SP1
       // Read energy meter.
       updateEnergy();
@@ -646,28 +691,41 @@ void loop() {
         onTime.count(); 
       }
 
+      // Check WiFi connection
+      if (WiFi.status() != WL_CONNECTED) {
+        // No connection - reconnect
+        WiFi.disconnect();
+        WiFi.persistent(false);
+        WiFi.mode(WIFI_OFF);
+        WiFi.mode(WIFI_STA);
+        WiFi.begin(C_SSID, C_PWD);
+        delay(100);
+      }
+
 #if TELNET_LOG == 1
-    // Write data to the telnet client(s), if any
-    tl.printf("%3s for %5d:%02d:%02d   Run time %5d:%02d:%02d    ON time %5d:%02d:%02d\n",
-      Testschalter ? "ON" : "OFF",
-      stateTime.getHour(),
-      stateTime.getMinute(),
-      stateTime.getSecond(),
-      upTime.getHour(),
-      upTime.getMinute(),
-      upTime.getSecond(),
-      onTime.getHour(),
-      onTime.getMinute(),
-      onTime.getSecond());
+      // Output only if a client is connected
+      if (tl.isActive()) {
+        // Write data to the telnet client(s), if any
+        tl.printf("%3s for %5d:%02d:%02d   Run time %5d:%02d:%02d    ON time %5d:%02d:%02d\n",
+          Testschalter ? "ON" : "OFF",
+          stateTime.getHour(),
+          stateTime.getMinute(),
+          stateTime.getSecond(),
+          upTime.getHour(),
+          upTime.getMinute(),
+          upTime.getSecond(),
+          onTime.getHour(),
+          onTime.getMinute(),
+          onTime.getSecond());
 #if DEVICETYPE == GOSUND_SP1
-    tl.printf("   | %6.2f V| %8.2f W| %5.2f A| %8.2f Wh|\n", 
-      volt, 
-      watt, 
-      amps, 
-      accumulatedWatts); 
+        tl.printf("   | %6.2f V| %8.2f W| %5.2f A| %8.2f Wh|\n", 
+          volt, 
+          watt, 
+          amps, 
+          accumulatedWatts); 
 #endif
+      }
 #endif
-      last = millis();
     }
   } else {
     // NO. CONFIG mode - listen to web requests only.

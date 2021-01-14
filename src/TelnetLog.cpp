@@ -48,6 +48,7 @@ size_t TelnetLog::write(uint8_t c) {
 }
 
 void TelnetLog::update() {
+  telnetActive = false;
   // Cleanup disconnected session
   for (uint8_t i = 0; i < TL_maxClients; i++) {
     // Client in use?
@@ -59,6 +60,7 @@ void TelnetLog::update() {
       } else {
         // Yes. Discard any input!
         while (TL_Client[i].available()) TL_Client[i].read();
+        telnetActive = true;
       }
     }
   }
