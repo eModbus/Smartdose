@@ -14,7 +14,7 @@
 //   * Password for home network
 //   * Device ID for Hue, network host and OTA names
 //   * OTA password
-//   Config data permanently stored in LittleFS
+//   Config data permanently stored in EEPROM
 
 // ========== Definitions =================
 // Defines for the type of device
@@ -38,9 +38,10 @@
 #include <ESP8266WiFi.h>
 #include <ESP8266WebServer.h>
 #include "fauxmoESP.h"
-#include "LittleFS.h"
+#include <EEPROM.h>
 #if TELNET_LOG == 1
 #include "TelnetLog.h"
+#undef LOGDEVICE
 #define LOGDEVICE tl
 #define LOCAL_LOG_LEVEL LOG_LEVEL_VERBOSE
 #include "Logging.h"
@@ -57,7 +58,7 @@
 #define BUTTON 3
 #define SIGNAL_LED RED_LED
 #define POWER_LED BLUE_LED
-#define MAXWORD 15
+#define MAXWORD 22
 
 // Energy monitor GPIOs
 #define SEL_PIN 12
@@ -74,7 +75,7 @@
 #define BUTTON 1
 #define SIGNAL_LED LED
 #define POWER_LED LED
-#define MAXWORD 7
+#define MAXWORD 8
 #endif
 
 // Time between (energy) monitor updates in ms
@@ -89,6 +90,13 @@
 // maximum length of configuration parameters
 #define PARMLEN 64
 
+// Config flags
+#define CONF_DEFAULT_ON 0x0001
+#define CONF_MASK       0x0001
+#define CONF_IS_GOSUND  0x8000
+#define CONF_HAS_TELNET 0x4000
+#define CONF_HAS_MODBUS 0x2000
+
 // Blink patterns for the different modes
 // Wait for initial button press
 #define KNOBBLINK 0x3333
@@ -97,29 +105,27 @@
 // Wifi connect mode:
 #define WIFIBLINK 0xFF00
 
-// File paths in LittleFS
-const char SSIDFILE[] = "/conf/SSID";
-const char PWDFILE[]  =  "/conf/PWD";
-const char DEVFILE[]  =  "/conf/DEV";
-const char OPWDFILE[] = "/conf/OTA";
-
 // Some forward declarations
-bool getOut(char *target, const char *readname);
-bool fillIn(char *target, String arg, const char *writename);
 void handleSave();
 void handleRestart();
 void handleRoot();
 bool Debouncer(bool raw);
 void SetState(uint8_t device_id, const char * device_name, bool state, uint8_t value);
 void wifiSetup();
+
 #if DEVICETYPE == GOSUND_SP1
 unsigned long int getFrequency();
 void updateEnergy();
 unsigned long int highPulse = HIGH_PULSE;
 #endif
+
 #if MODBUS_SERVER == 1
 ModbusMessage FC03(ModbusMessage request);
 ModbusMessage FC06(ModbusMessage request);
+ModbusMessage FC42(ModbusMessage request);
+#if DEVICETYPE == GOSUND_SP1
+ModbusMessage FC43(ModbusMessage request);
+#endif
 #endif
 
 fauxmoESP fauxmo;             // create Philips Hue lookalike
@@ -128,6 +134,33 @@ uint8_t dimValue;             // Hue dimmer value
 ESP8266WebServer server(80);  // Web server on port 80
 uint8_t mode;                 // Operations mode, RUN or CONFIG
 IPAddress myIP;               // local IP address
+char APssid[64];              // Access point ID
+uint16_t configFlags;         // 16 configuration flags
+                              // 0x0001 : switch ON on boot
+
+// The following are used only for GOSUND SP1, but will be initialized always for EEPROM
+struct Measure {
+  double measured;            // Observed value
+  float factor;               // correction factor
+  uint32_t count;             // Count of samples while sampling
+  float sampleSum;            // sum of sampled correction values
+  Measure() : measured(0.0), factor(1.0), count(0), sampleSum(0.0) {}
+};
+
+#define VOLTAGE 0
+#define CURRENT 1
+#define POWER   2
+Measure measures[3];
+
+#if DEVICETYPE == GOSUND_SP1
+// Spent Watt hours (Wh) since system boot
+double accumulatedWatts = 0.0;
+// Counters and interrupt functions to sample meter frequency
+volatile unsigned long int CF1tick = 0;
+void ICACHE_RAM_ATTR CF1Tick() { CF1tick++; }
+volatile unsigned long int CF_tick = 0;
+void ICACHE_RAM_ATTR CF_Tick() { CF_tick++; }
+#endif
 
 // TimeCount: class to hold time passed
 class TimeCount {
@@ -161,6 +194,7 @@ protected:
 };
 
 // Time between reads of the runtime data monitor im milliseconds
+// Less than 2000ms may end up in stalling the device!
 constexpr unsigned int update_interval = (UPDATE_TIME >= 2000) ? UPDATE_TIME : 2000;
 // Number of intervals since system boot
 unsigned long tickCount = 0;
@@ -169,20 +203,10 @@ TimeCount upTime;
 TimeCount stateTime;
 TimeCount onTime;
 
-#if DEVICETYPE == GOSUND_SP1
-// Read energy values
-double volt = 0.0;                // Last read voltage value
-double amps = 0.0;                // Last read current value
-double watt = 0.0;                // Last read power value
-// Spent Watt hours (Wh) since system boot
-double accumulatedWatts = 0.0;
-volatile unsigned long int tick = 0;
-void ICACHE_RAM_ATTR cntTick() { tick++; }
-#endif
-
 #if MODBUS_SERVER == 1
 ModbusServerTCPasync MBserver;
 ModbusMessage Response;
+bool pendingEEPROMchange = false;
 #endif
 
 // char arrays for configuration parameters
@@ -345,6 +369,17 @@ ModbusMessage FC03(ModbusMessage request) {
 
     // Fill in current values
     memory.add((uint16_t)(Testschalter ? dimValue : 0));
+    uint16_t showFlags = configFlags & CONF_MASK;
+#if DEVICETYPE == GOSUND_SP1
+    showFlags |= CONF_IS_GOSUND;
+#endif
+#if TELNET_LOG == 1
+    showFlags |= CONF_HAS_TELNET;
+#endif
+#if MODBUS_SERVER == 1
+    showFlags |= CONF_HAS_MODBUS;
+#endif
+    memory.add(showFlags);
     memory.add(upTime.getHour());
     memory.add(upTime.getMinute());
     memory.add(upTime.getSecond());
@@ -357,9 +392,12 @@ ModbusMessage FC03(ModbusMessage request) {
     // Following only for GOSUND_SP1
 #if DEVICETYPE == GOSUND_SP1
     memory.add((float)accumulatedWatts);
-    memory.add((float)watt);
-    memory.add((float)volt);
-    memory.add((float)amps);
+    memory.add(measures[VOLTAGE].factor);
+    memory.add(measures[CURRENT].factor);
+    memory.add(measures[POWER].factor);
+    memory.add((float)measures[VOLTAGE].measured);
+    memory.add((float)measures[CURRENT].measured);
+    memory.add((float)measures[POWER].measured);
 #endif
     // set up response
     response.add(request.getServerID(), request.getFunctionCode(), (uint8_t)(words * 2));
@@ -372,7 +410,7 @@ ModbusMessage FC03(ModbusMessage request) {
 }
 
 // -----------------------------------------------------------------------------
-// FC06. Switch socket on or off 
+// FC06. Switch socket on or off or change config values
 // -----------------------------------------------------------------------------
 ModbusMessage FC06(ModbusMessage request) {
   ModbusMessage response;
@@ -382,7 +420,9 @@ ModbusMessage FC06(ModbusMessage request) {
   request.get(2, address);
   request.get(4, value);
 
-  // Address valid?
+  LOG_D("Write %d: %d\n", address, value);
+
+  // Address valid? Switch trigger on 1
   if (address == 1) {
     // Yes. Data in valid range?
     if (value < 256) {
@@ -393,9 +433,16 @@ ModbusMessage FC06(ModbusMessage request) {
       // No, illegal data value
       response.setError(request.getServerID(), request.getFunctionCode(), ILLEGAL_DATA_VALUE);
     }
+  // Also okay: 2 - flag word
+  } else if (address == 2) {
+    // Write to EEPROM shadow RAM only - FC42 may make it persistent
+    pendingEEPROMchange = true;
+    configFlags = value & CONF_MASK;
+    EEPROM.put(2, value & CONF_MASK);
+    response = ECHO_RESPONSE;
 #if DEVICETYPE == GOSUND_SP1
-  // On the GOSUND_SP1 we may reset the accumulated power consumption
-  } else if (address == 8) {
+  // On the GOSUND_SP1 we may reset the accumulated power consumption on word 9
+  } else if (address == 9) {
     // Value is zero?
     if (value == 0) {
       // Yes. Reset the counter
@@ -412,13 +459,91 @@ ModbusMessage FC06(ModbusMessage request) {
   }
   return response;
 }
+
+// -----------------------------------------------------------------------------
+// FC42. Fix changed parameters in EEPROM
+// -----------------------------------------------------------------------------
+ModbusMessage FC42(ModbusMessage request) {
+  ModbusMessage response;
+  LOG_D("FC42 received. pEc=%d\n", pendingEEPROMchange ? 1 : 0);
+  if (pendingEEPROMchange) {
+    EEPROM.commit();
+    pendingEEPROMchange = false;
+    response.setError(request.getServerID(), request.getFunctionCode(), SUCCESS);
+  } else {
+    response.setError(request.getServerID(), request.getFunctionCode(), NEGATIVE_ACKNOWLEDGE);
+  }
+  return response;
+}
+
+#if DEVICETYPE == GOSUND_SP1
+// -----------------------------------------------------------------------------
+// FC43. Power meter adjustment
+// -----------------------------------------------------------------------------
+ModbusMessage FC43(ModbusMessage request) {
+  ModbusMessage response;
+  uint8_t type = 0;           // 0:volts, 1:amps, 2:watts
+  float value = 0.0;          // Real value sent in message
+  float factor = 0.0;         // Sampled factor for this value
+  bool isReset = false;       // 
+
+  // Read the type byte
+  request.get(2, type);
+  // If not reset (no further data), read value
+  if (request.size() == 7) {
+    request.get(3, value);
+  } else {
+    isReset = true;
+  }
+
+  LOG_D("FC43 got type=%d, value=%f\n", (unsigned int)type, value);
+
+  // Set default response
+  response.setError(request.getServerID(), request.getFunctionCode(), SUCCESS);
+
+  // Is it a valid type?
+  if (type >=0 && type <=2) {
+    // Yes. did we get a value?
+    if (isReset) {
+      // No. Reset all sampled values and factor
+      measures[type].factor = 1.0;
+      measures[type].sampleSum = 0.0;
+      measures[type].count = 0;
+      EEPROM.put(4 + 4 * type, 1.0);
+      pendingEEPROMchange = true;
+    } else {
+      // Yes. Do we have a measured value to compare?
+      if (measures[type].measured != 0.0) {
+        // Yes. Calculate correction factor
+        factor = value / measures[type].measured;
+        // Add it to the summed-up factors
+        measures[type].sampleSum += factor;
+        measures[type].count++;
+        // Correction factor overall is the average of sampled factors
+        measures[type].factor = measures[type].sampleSum / measures[type].count;
+        EEPROM.put(4 + 4 * type, measures[type].factor);
+        pendingEEPROMchange = true;
+      }
+    }
+    LOG_D("Result: type=%d, factor=%f, sum=%f, count=%d\n", 
+      type, 
+      measures[type].factor, 
+      measures[type].sampleSum, 
+      measures[type].count);
+  } else {
+    response.setError(request.getServerID(), request.getFunctionCode(), ILLEGAL_DATA_VALUE);
+  }
+  return response;
+}
+#endif
+
 #endif
 
 // -----------------------------------------------------------------------------
 // Setup. Find out which mode to run and initialize objects
 // -----------------------------------------------------------------------------
 void setup() {
-  File f;
+  uint8_t confcnt = 0;     // count necessary config variables
 
   Serial.begin(115200);
   Serial.println();
@@ -435,33 +560,61 @@ void setup() {
   digitalWrite(SIGNAL_LED, HIGH);  // LED OFF
   digitalWrite(POWER_LED, HIGH);   // LED OFF
 
-  // Open LittleFS.
-  bool rc = LittleFS.begin();
-
-  // Open failed or no formating registered?
-  if (!rc || !LittleFS.exists("/fmtOK.txt")) {
-    // YES. Light red LED and format LittleFS
-    digitalWrite(SIGNAL_LED, LOW);
-    LittleFS.format();
-
-    // Now register format to do it only once
-    f = LittleFS.open("/fmtOK.txt", "w");
-    f.print("Format OK");
-    f.close();
-
-    // stop LED
-    digitalWrite(SIGNAL_LED, HIGH);
-  }
-
-  // attempt to read all four configuration values. Count each successful read.
-  uint8_t confcnt = 0;
-  if (getOut(C_SSID, SSIDFILE)) confcnt++;
-  if (getOut(C_PWD, PWDFILE)) confcnt++;
-  if (getOut(DEVNAME, DEVFILE)) confcnt++;
-  if (getOut(O_PWD, OPWDFILE)) confcnt++;
-
   // Determine operation mode - normally RUN
   mode = RUN;
+
+  // Configure EEPROM
+  // EEPROM layout:
+  //   0 : uint16_t magic value
+  //   2 : uint16_t flag word
+  //   4 : float32 Volts adjustment factor (Gosund SP1)
+  //   8 : float32 Amperes adjustment factor (Gosund SP1)
+  //  12 : float32 Watts adjustment factor (Gosund SP1)
+  //  16 : char[PARMLEN] SSID
+  //  16 + PARMLEN : char[PARMLEN] PASS
+  //  16 + 2 * PARMLEN : char[PARMLEN] DEVICENAME
+  //  16 + 3 * PARMLEN : char[PARMLEN] OTA_PWD
+  EEPROM.begin(512);
+
+  // Read magic value
+  uint16_t magic;
+  EEPROM.get(0, magic);
+
+  // Is it valid (EEPROM was initialized before)?
+  if (magic != 0x4711) {
+    // No, we need to do it first.
+    // Init control values
+    EEPROM.put(2, (uint16_t)0x0000);    // flags
+    EEPROM.put(4, measures[VOLTAGE].factor);          // Adjustment factor volts
+    EEPROM.put(8, measures[CURRENT].factor);          // Adjustment factor amperes
+    EEPROM.put(12, measures[POWER].factor);           // Adjustment factor watts
+    // Init char variable space
+    for (uint16_t i = 16; i < 512; ++i) {
+      EEPROM.write(i, 0);
+    }
+    // Put in magic value to stamp EEPROM valid
+    EEPROM.put(0, 0x4711);
+    // Write data
+    EEPROM.commit();
+  } else {
+    // Magic value is okay - read config data
+    EEPROM.get(2, configFlags);
+    EEPROM.get(4, measures[VOLTAGE].factor);          // Adjustment factor volts
+    EEPROM.get(8, measures[CURRENT].factor);          // Adjustment factor amperes
+    EEPROM.get(12, measures[POWER].factor);           // Adjustment factor watts
+    uint16_t addr = 16;
+    strncpy(C_SSID, (const char *)EEPROM.getConstDataPtr() + addr, PARMLEN);
+    if (EEPROM[addr]) confcnt++;
+    addr += PARMLEN;
+    strncpy(C_PWD, (const char *)EEPROM.getConstDataPtr() + addr, PARMLEN);
+    if (EEPROM[addr]) confcnt++;
+    addr += PARMLEN;
+    strncpy(DEVNAME, (const char *)EEPROM.getConstDataPtr() + addr, PARMLEN);
+    if (EEPROM[addr]) confcnt++;
+    addr += PARMLEN;
+    strncpy(O_PWD, (const char *)EEPROM.getConstDataPtr() + addr, PARMLEN);
+    if (EEPROM[addr]) confcnt++;
+  }
 
   // we will wait 3s for button presses to deliberately enter CONFIG mode
   SignalLed.start(100, KNOBBLINK);
@@ -478,6 +631,17 @@ void setup() {
   }
   SignalLed.stop();
 
+  // Create AP SSID from flash ID,
+  strcpy(APssid, "Socket_XXXXXX");
+  long id = ESP.getChipId();
+  for (uint8_t i = 6; i; i--) {
+    char c = (id & 0xf);
+    if (c > 9) { c -= 10; c += 'A'; }
+    else    c += '0';
+    APssid[6 + i] = c;
+    id >>= 4;
+  }
+
   // CONFIG mode required?
   if (confcnt<4) {
     // YES. Switch to CONFIG and start special blink pattern,
@@ -485,16 +649,6 @@ void setup() {
     SignalLed.start(100, CONFIGBLINK);
 
     // Set up access point mode. First, create AP SSID from flash ID,
-    char APssid[64];
-    strcpy(APssid, "Socket_XXXXXX");
-    long id = ESP.getChipId();
-    for (uint8_t i=6; i; i--) {
-      char c = (id & 0xf);
-      if (c>9) { c -= 10; c += 'A'; }
-      else    c += '0';
-      APssid[6+i] = c;
-      id >>= 4;
-    }
 
     // Start AP.
     WiFi.softAP(APssid, "Maelstrom");
@@ -537,7 +691,8 @@ void setup() {
 
     accumulatedWatts = 0.0;
 
-    attachInterrupt(digitalPinToInterrupt(CF1_PIN), cntTick, RISING);
+    attachInterrupt(digitalPinToInterrupt(CF1_PIN), CF1Tick, RISING);
+    attachInterrupt(digitalPinToInterrupt(CF_PIN), CF_Tick, RISING);
 
 #endif
 
@@ -545,6 +700,10 @@ void setup() {
     // Register server functions to read and write data
     MBserver.registerWorker(1, READ_HOLD_REGISTER, &FC03);
     MBserver.registerWorker(1, WRITE_HOLD_REGISTER, &FC06);
+    MBserver.registerWorker(1, USER_DEFINED_42, &FC42);
+#if DEVICETYPE == GOSUND_SP1
+    MBserver.registerWorker(1, USER_DEFINED_43, &FC43);
+#endif
     // Init and start Modbus server:
     // Listen on port 502 (MODBUS standard), maximum 2 clients, 2s timeout
     MBserver.start(502, 2, 2000);
@@ -557,11 +716,14 @@ void setup() {
 #if TELNET_LOG == 1
   // Init telnet server
   MBUlogLvl = LOG_LEVEL_VERBOSE;
-  tl.begin();
+  tl.begin(APssid);
   tl.update();
 #endif
 
-  LOG_V("setup() finished.\n");
+  // Default ON?
+  if (configFlags & 0x0001) {
+    SetState(0, DEVNAME, true, 255);
+  }
 }
 
 // -----------------------------------------------------------------------------
@@ -574,36 +736,24 @@ bool Debouncer(bool raw) {
 }
 
 #if DEVICETYPE == GOSUND_SP1
-unsigned long int getFrequency() {
-  unsigned long int pls = 0;
-
-/* 
-  uint8_t cnt = 0;
-  const uint8_t repeats(20);
-  unsigned long int tmp = 0;
-  for (uint8_t i = 0; i < repeats; ++i) {
-    pls = pulseIn(CF_PIN, HIGH, 1000000);
-    if (pls) {
-      tmp += pls;
-      cnt++;
-    }
-  }
-  if (cnt) {
-    return (unsigned long int)(tmp / cnt);
-  } else {
-    return 0;
-  }
-  */
-
+// getFrequency: blocking function to sample power meter data
+void getFrequency(unsigned long int& cf, unsigned long int& cf1) {
+  // Disable interrupts
   cli();
-  tick = 0;
+  // Init counters
+  CF_tick = 0;
+  CF1tick = 0;
+  // Enable interrupts
   sei();
   // count for 1000 msec
   delay(1000);
+  // Disable interrupts
   cli();
-  pls = tick;
+  // save counters
+  cf = CF_tick;
+  cf1 = CF1tick;
+  // Enable interrupts
   sei();
-  return pls;
 }
 
 void updateEnergy() {
@@ -611,33 +761,22 @@ void updateEnergy() {
   unsigned long int cf;                    // CF read value (power pulse length)
   unsigned long int cf1;                   // CF1 read value (voltage/current pulse length)
 
-  // Read pulse lengths. Note: current reading may take a long time (up to 2.5 seconds)
-  // cf1 = pulseIn(CF1_PIN, LOW, 1000000);   // Read voltage or current
-  cf1 = getFrequency();
-  cf  = pulseIn(CF_PIN, LOW, 1000000);     // Read power
-
+  // Read pulse lengths. Note: reading takes 1s blocking time!
+  getFrequency(cf, cf1);
 
   // Calculate watts according the BL 0937 specs
-  //              Vref^2       cycle length       v-specs     resistors
-  // watt = cf ? (1483524.0 / (cf + highPulse) / 1721506.0 * 2001000.0) : 0.0;
-  watt = cf ? (1724380.585/(cf + highPulse)) : 0.0;
+  measures[POWER].measured = cf ? (cf * 1.218 * 1.218 * 2.0) / 1.721506 * measures[POWER].factor : 0.0;
 
   // Did we read current?
   if (select) {
     // Yes. Calculate amps according to specs
-    //               Vref         cycle length        v-specs   shunt
-    // amps = cf1 ? (1218000.0 / (cf1 + highPulse) / 94638.0 * 1000.0) : 0.0;
-    // amps = cf1 ? (12870.0/(cf1 + highPulse)) : 0.0;
-    amps = (cf1 * 1.218) / 94638.0 * 1000.0;
+    measures[CURRENT].measured = cf1 ? ((cf1 * 1.218) / 94638.0 * 1000.0) * measures[CURRENT].factor : 0.0;
     // Toggle SEL pin to read the other value next time around
     digitalWrite(SEL_PIN, HIGH);
     select = false;
   } else {
     // No. Calculate volts according to specs
-    //               Vref         cycle length        v-specs   resistors
-    // volt = cf1 ? (1218000.0 / (cf1 + highPulse) / 15397.0 * 2001.0) : 0.0;
-    // volt = cf1 ? (158299.656/(cf1 + highPulse)) : 0.0;
-    volt = (cf1 * 1.218) / 15397.0 * 2001.0;
+    measures[VOLTAGE].measured = cf1 ? ((cf1 * 1.218) / 15397.0 * 2001.0) * measures[VOLTAGE].factor : 0.0;
     // Toggle SEL pin to read the other value next time around
     digitalWrite(SEL_PIN, LOW);
     select = true;
@@ -649,6 +788,8 @@ void updateEnergy() {
 // Main loop
 // -----------------------------------------------------------------------------
 void loop() {
+  static uint8_t oneTime = 8;
+
   static uint32_t last = millis();
   // Check for OTA update requests
   ArduinoOTA.handle();
@@ -673,11 +814,20 @@ void loop() {
 
     // New read due?
     if ((millis() - last) > update_interval) {
+      if (oneTime) {
+        oneTime--;
+        if (!oneTime) {
+          HEXDUMP_V("EEPROM", EEPROM.getConstDataPtr(), EEPROM.length());
+        }
+      }
+#if DEVICETYPE == GOSUND_SP1
+      unsigned long int calcLast = millis() - last;
+#endif
       last = millis();
 #if DEVICETYPE == GOSUND_SP1
       // Read energy meter.
       updateEnergy();
-      accumulatedWatts += watt * (millis() - last) / 3600000.0;
+      accumulatedWatts += measures[POWER].measured * calcLast / 3600000.0;
 #endif
       // Count up timers
       upTime.count();
@@ -686,7 +836,7 @@ void loop() {
       // GOSUND_SP1 devices additionally will watch current to state ON
       if (Testschalter) { 
 #if DEVICETYPE == GOSUND_SP1
-        if (amps > 0.0)
+        if (measures[CURRENT].measured > 0.0)
 #endif
         onTime.count(); 
       }
@@ -719,9 +869,9 @@ void loop() {
           onTime.getSecond());
 #if DEVICETYPE == GOSUND_SP1
         tl.printf("   | %6.2f V| %8.2f W| %5.2f A| %8.2f Wh|\n", 
-          volt, 
-          watt, 
-          amps, 
+          measures[VOLTAGE].measured, 
+          measures[POWER].measured, 
+          measures[CURRENT].measured, 
           accumulatedWatts); 
 #endif
       }
@@ -737,7 +887,7 @@ void loop() {
 // handleRoot - bring out configuration page
 // -----------------------------------------------------------------------------
 void handleRoot() {
-  // Setup HTML with embedded values from LittleFS - if any.
+  // Setup HTML with embedded values from EEPROM - if any.
   String page = "<!DOCTYPE html><html lang=\"en\"><head><meta charset=\"utf-8\">" \
     "<title>Smart socket setup</title>" \
     "<style type=\"text/css\">" \
@@ -786,66 +936,28 @@ void handleRestart() {
 }
 
 // -----------------------------------------------------------------------------
-// handleSave - get user input from web page and store in LittleFS and config parameters
+// handleSave - get user input from web page and store in EEPROM and config parameters
 // -----------------------------------------------------------------------------
 void handleSave() {
-  fillIn(C_SSID, server.arg("ssid"), SSIDFILE);
-  fillIn(C_PWD, server.arg("pwd"), PWDFILE);
-  fillIn(DEVNAME, server.arg("device"), DEVFILE);
-  fillIn(O_PWD, server.arg("otapwd"), OPWDFILE);
+
+  // Get user inputs
+  server.arg("ssid").toCharArray(C_SSID, PARMLEN);
+  server.arg("pwd").toCharArray(C_SSID, PARMLEN);
+  server.arg("device").toCharArray(C_SSID, PARMLEN);
+  server.arg("otapwd").toCharArray(C_SSID, PARMLEN);
+
+  // Write to EEPROM
+  uint16_t addr = 16;
+  strncpy((char *)EEPROM.getDataPtr() + addr, C_SSID, PARMLEN);
+  addr += PARMLEN;
+  strncpy((char *)EEPROM.getDataPtr() + addr, C_PWD, PARMLEN);
+  addr += PARMLEN;
+  strncpy((char *)EEPROM.getDataPtr() + addr, DEVNAME, PARMLEN);
+  addr += PARMLEN;
+  strncpy((char *)EEPROM.getDataPtr() + addr, O_PWD, PARMLEN);
+  EEPROM.commit();
 
   // re-display configuration web page
   handleRoot();
-}
-
-// -----------------------------------------------------------------------------
-// fillIn - saves String arg into LittleFS and configuration parameter
-// -----------------------------------------------------------------------------
-bool fillIn(char *target, String arg, const char *writename) {
-  File f;
-
-  // No value? Bail out!
-  if (!arg) return false;
-
-  // get length of given parameter
-  uint8_t len = arg.length();
-
-  // Copy to parameter char array
-  arg.toCharArray(target, PARMLEN);
-
-  // Also write into LittleFS 
-  f = LittleFS.open(writename, "w");
-  if (f) {
-    f.write((uint8_t *)target, len);
-    f.close();
-  }
-  return true;
-}
-
-// -----------------------------------------------------------------------------
-// getOut - read configuration parameter from LittleFS and fill in char array
-// -----------------------------------------------------------------------------
-bool getOut(char *target, const char *readname) {
-  File f;
-  
-  *target = 0;                    // assume no data
-  
-  // Open LittleFS path
-  f = LittleFS.open(readname, "r");
-  if (f) { // valid file?
-    // YES. get data length and read bytes into char array.
-    uint8_t len = f.size();
-    f.read((uint8_t *)target, len);
-    f.close();
-
-    // terminate char array with 0x00
-    target[len] = 0;
-
-    // leave OK
-    return true;
-  }
-
-  // NO, no file found. Bail out!
-  return false;
 }
 

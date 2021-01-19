@@ -16,7 +16,8 @@ TelnetLog::~TelnetLog() {
   delete[] TL_Client;
 }
 
-void TelnetLog::begin() {
+void TelnetLog::begin(const char * label) {
+  strncpy(myLabel, label, 64);
   TL_Server->begin();
   TL_Server->setNoDelay(true);
 }
@@ -75,7 +76,9 @@ void TelnetLog::update() {
         TL_Client[i] = TL_Server->available(); 
         
         TL_Client[i].flush();  // clear input buffer, else you get strange characters
-        TL_Client[i].println("Welcome!");
+        TL_Client[i].print("Welcome to '");
+        TL_Client[i].print(myLabel);
+        TL_Client[i].println("'!");
         
         TL_Client[i].print("Millis since start: ");
         TL_Client[i].println(millis());

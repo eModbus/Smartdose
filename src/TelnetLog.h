@@ -14,7 +14,7 @@ class TelnetLog : public Print {
 public:
   TelnetLog(uint16_t port, uint8_t maxClients);
   ~TelnetLog();
-  void begin();
+  void begin(const char *label);
   void end();
   void update();
   inline bool isActive() { return telnetActive; };
@@ -93,5 +93,6 @@ protected:
     WiFiServer *TL_Server;
     WiFiClient *TL_Client;
     bool telnetActive;
+    char myLabel[64];
 };
 
