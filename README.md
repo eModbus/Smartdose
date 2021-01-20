@@ -32,6 +32,35 @@ Clicking on ``Save`` will store your data in EEPROM.
 
 Finally click on ``Reset`` to restart the device and apply your configurations.
 
+### Usage
+Plug in the device, then  wait some seconds for it to settle. The signal LED will flash in quick succession first to allow you to press the button for configuration mode.
+After that, the device will try to connect to your WiFi network with the data you gave at the configuration. This is indicated by a slow blink of the signal LED:
+Finally a short blink will signal it has read the configuration data and is ready.
+
+#### Manual switching
+Press the device's button firmly for a short time, then release it to switch the socket on and off. The power LED will light in ON state.
+
+#### Telnet monitor
+(This of course will only apply if you configured ``TELNET_LOG 1`` in the source code!)
+
+Use a terminal program (like the recommended ``putty`` on Windows) to connect to the device on TCP port 23. You may use the device name you configured, or the device's IP address. The terminal program should be set to "Add a CR to every LF" to have clean line breaks.
+Terminal output will be like
+```
+Welcome to 'Socket_F9AD5B'!
+Millis since start: 78116166
+Free Heap RAM: 29640
+Server IP: 192.168.178.54
+----------------------------------------------------------------
+ ON for    21:41:30   Run time    21:41:30    ON time    17:50:35
+   | 230.00 V|     0.00 W|  0.01 A|  9482.34 Wh|
+ ON for    21:41:35   Run time    21:41:35    ON time    17:50:40
+   | 230.17 V|     0.00 W|  0.01 A|  9482.34 Wh|
+ ON for    21:41:40   Run time    21:41:40    ON time    17:50:40
+   | 230.17 V|     0.00 W|  0.00 A|  9482.34 Wh|
+```
+
+**Note**: the Telnet output is read-only, you may not enter any command here!
+
 ### Modbus register reference
 The Modbus server running on the smart plus will give out internal values as "holding registers", hence function code 0x03 READ_HOLD_REGISTER can be used to retrieve these values.
 Register addresses 1 to 8 are available on any device, regardless of type, whereas registers 9 and onward are only valid for Gosund SP1 devices.
