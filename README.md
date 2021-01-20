@@ -19,10 +19,18 @@ To indicate this time, the signal LED will continuously flash in short intervals
 The signal LED will flash three times, then pause a beat, then start again to signal configuration mode has been activated.
 To get to the configuration page, you need to connect to the temporary WiFi network the device has set up.
 The network is named (SSID is) "Socket_XXXXXX", with "XXXXXX" as the last 6 hexadecimal digits of the device's chip ID.
-There is no password necessary.
+The password is "Maelstrom" unless you have changed it in the source.
 Once you have made a successful connection to that network and received an IP address, open your browser to [http://192.168.4.1]().
 Now the configuration page will be displayed:
 
+<img src="/ConfigPage.png" width="50%">
+
+Fill in your WiFi network SSID and password. Then give the device a unique name it will be using as host name, OTA name etc.
+Finally choose an OTA password to secure your future OTA firmware transfers.
+
+Clicking on ``Save`` will store your data in EEPROM.
+
+Finally click on ``Reset`` to restart the device and apply your configurations.
 
 ### Modbus register reference
 The Modbus server running on the smart plus will give out internal values as "holding registers", hence function code 0x03 READ_HOLD_REGISTER can be used to retrieve these values.
