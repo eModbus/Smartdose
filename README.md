@@ -10,6 +10,20 @@ This is a standalone firmware for the named smart plugs/sockets, supporting:
 
 No app, no cloud service, no data transfers outside your home network
 
+### First-time use
+After flashing the firmware to a device, it will be uninitialized. If you will plug it in, it will be in configuration mode.
+**Note**: to later get into configuration mode again, press the button within the first 3 seconds after plugging the device. 
+To indicate this time, the signal LED will continuously flash in short intervals.
+
+### Configuration
+The signal LED will flash three times, then pause a beat, then start again to signal configuration mode has been activated.
+To get to the configuration page, you need to connect to the temporary WiFi network the device has set up.
+The network is named (SSID is) "Socket_XXXXXX", with "XXXXXX" as the last 6 hexadecimal digits of the device's chip ID.
+There is no password necessary.
+Once you have made a successful connection to that network and received an IP address, open your browser to [http://192.168.4.1]().
+Now the configuration page will be displayed:
+
+
 ### Modbus register reference
 The Modbus server running on the smart plus will give out internal values as "holding registers", hence function code 0x03 READ_HOLD_REGISTER can be used to retrieve these values.
 Register addresses 1 to 8 are available on any device, regardless of type, whereas registers 9 and onward are only valid for Gosund SP1 devices.
