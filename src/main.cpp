@@ -41,8 +41,6 @@
 #include <EEPROM.h>
 #if TELNET_LOG == 1
 #include "TelnetLog.h"
-#undef LOGDEVICE
-#define LOGDEVICE tl
 #define LOCAL_LOG_LEVEL LOG_LEVEL_VERBOSE
 #include "Logging.h"
 #endif
@@ -716,6 +714,7 @@ void setup() {
 #if TELNET_LOG == 1
   // Init telnet server
   MBUlogLvl = LOG_LEVEL_VERBOSE;
+  LOGDEVICE = &tl;
   tl.begin(APssid);
   tl.update();
 #endif

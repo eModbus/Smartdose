@@ -48,6 +48,19 @@ size_t TelnetLog::write(uint8_t c) {
   return len;
 }
 
+size_t TelnetLog::write(const uint8_t *buffer, size_t len) {
+  // Loop over clients
+  for (uint8_t i = 0; i < TL_maxClients; ++i) {
+    // Is it active?
+    if (TL_Client[i] || TL_Client[i].connected()) {
+      // Yes. print out line
+      len = TL_Client[i].write(buffer, len);
+      TL_Client[i].flush();
+    }
+  }
+  return len;
+}
+
 void TelnetLog::update() {
   telnetActive = false;
   // Cleanup disconnected session
