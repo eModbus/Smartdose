@@ -3,10 +3,16 @@
 //               MIT license - see license.md for details
 // =================================================================================================
 
+#ifndef _TELNETLOGASYNC_H
+#define _TELNETLOGASYNC_H
 // Include Arduino.h to make Print and Serial known
 #include <Arduino.h>
+#include <vector>
 #include <ESP8266WiFi.h>
-#include <WiFiUdp.h>
+#include <ESPAsyncTCP.h>
+#include <ESPAsyncWebServer.h>
+
+using std::vector;
 
 class TelnetLog : public Print {
 public:
@@ -14,18 +20,18 @@ public:
   ~TelnetLog();
   void begin(const char *label);
   void end();
-  void update();
-  inline bool isActive() { return telnetActive; };
+  inline bool isActive() { return (TL_Client.size() ? true : false); };
   size_t write(uint8_t c);
   size_t write(const uint8_t *buffer, size_t size);
 
 protected:
     // Telnet definitions
-    bool TL_ConnectionEstablished; // Flag for successfully handled connection
     uint8_t TL_maxClients;
-    WiFiServer *TL_Server;
-    WiFiClient *TL_Client;
-    bool telnetActive;
+    AsyncServer *TL_Server;
+    std::vector<AsyncClient *> TL_Client;
     char myLabel[64];
+    static void handleNewClient(void *srv, AsyncClient *client);
+    static void handleDisconnect(void *srv, AsyncClient *client);
+    static void handleData(void *srv, AsyncClient* client, void *data, size_t len);
 };
-
+#endif

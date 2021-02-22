@@ -36,11 +36,14 @@
 #include <Arduino.h>
 #include <ArduinoOTA.h>
 #include <ESP8266WiFi.h>
-#include <ESP8266WebServer.h>
+#include <ESPAsyncTCP.h>
+#include <ESPAsyncWebServer.h>
 #include "fauxmoESP.h"
 #include <EEPROM.h>
+#include "Blinker.h"
+#include "Buttoner.h"
 #if TELNET_LOG == 1
-#include "TelnetLog.h"
+#include "TelnetLogAsync.h"
 #define LOCAL_LOG_LEVEL LOG_LEVEL_VERBOSE
 #include "Logging.h"
 #endif
@@ -104,9 +107,9 @@
 #define WIFIBLINK 0xFF00
 
 // Some forward declarations
-void handleSave();
-void handleRestart();
-void handleRoot();
+void handleSave(AsyncWebServerRequest *request);
+void handleRestart(AsyncWebServerRequest *request);
+void handleRoot(AsyncWebServerRequest *request);
 bool Debouncer(bool raw);
 void SetState(uint8_t device_id, const char * device_name, bool state, uint8_t value);
 void wifiSetup();
@@ -129,7 +132,7 @@ ModbusMessage FC43(ModbusMessage request);
 fauxmoESP fauxmo;             // create Philips Hue lookalike
 bool Testschalter;            // Relay state
 uint8_t dimValue;             // Hue dimmer value
-ESP8266WebServer server(80);  // Web server on port 80
+AsyncWebServer server(80);    // Web server on port 80
 uint8_t mode;                 // Operations mode, RUN or CONFIG
 IPAddress myIP;               // local IP address
 char APssid[64];              // Access point ID
@@ -217,68 +220,18 @@ char O_PWD[PARMLEN];
 TelnetLog tl(23, 2);
 #endif
 
-// Blinker: helper class to maintain blinking patterns for the LED
-class Blinker {
-public:
-  // Constructor: takes GPIO of LED to handle
-  explicit Blinker(uint8_t port) :
-    B_port(port) {}
-  
-  // start: in interval steps, loop over blinking pattern
-  uint32_t start(uint32_t interval, uint16_t pattern) {
-    B_interval = interval;
-    B_pattern = pattern;
-    B_lastTick = millis();
-    return B_lastTick + B_interval;
-  }
-
-  // stop: stop blinking
-  void stop() {
-    B_lastTick = 0;
-    B_interval = 0;
-    B_pattern = 0;
-    B_counter = 0;
-    digitalWrite(B_port, HIGH);
-  }
-
-  // update: check if the blinking pattern needs to be advanced a step
-  void update() {
-    // Do we have a valid interval?
-    if (B_interval) {
-      // Yes. Has it passed?
-      if (millis() - B_lastTick > B_interval) {
-        // Yes. do some blinkenlights!
-        int state = digitalRead(B_port);            // get the current state of the LED pin
-        int bite = ((1 << B_counter) & B_pattern);  // get the current bit of the blink pattern
-        if (bite) { // if HIGH
-          if (state) digitalWrite(B_port, LOW);     // switch LED ON, if was OFF
-        } else { // if LOW
-          if (!state) digitalWrite(B_port, HIGH);   // switch LED OFF, if was ON
-        }
-        B_counter++;                                // advance one bit
-        B_counter &= 0xf;                           // catch overflow - counter runs 0-15
-        B_lastTick = millis();
-      }
-    }
-  }
-
-protected:
-  uint8_t B_counter;       // Number of bit currently processed
-  uint8_t B_port;          // GPIO of the LED
-  uint32_t B_lastTick;     // Last interval start time
-  uint32_t B_interval;     // Length of interval in milliseconds
-  uint16_t B_pattern;      // 16-bit blinking pattern
-};
-
 // SIGNAL_LED is the blinking one
-Blinker SignalLed(SIGNAL_LED);
+Blinker SignalLed(SIGNAL_LED, LOW);
+
+// Button to watch
+Buttoner button(BUTTON, LOW);
 
 // -----------------------------------------------------------------------------
 // Setup WiFi in RUN mode
 // -----------------------------------------------------------------------------
 void wifiSetup(const char *hostname) {
   // Start WiFi connection blinking pattern
-  SignalLed.start(100, WIFIBLINK);
+  SignalLed.start(WIFIBLINK, 100);
   // Set WIFI module to STA mode
   WiFi.mode(WIFI_STA);
 
@@ -543,15 +496,10 @@ ModbusMessage FC43(ModbusMessage request) {
 void setup() {
   uint8_t confcnt = 0;     // count necessary config variables
 
-  Serial.begin(115200);
-  Serial.println();
-  Serial.println("_OK_");
-
   // Define GPIO input/output direction
   pinMode(SIGNAL_LED, OUTPUT);
   pinMode(POWER_LED, OUTPUT);
   pinMode(RELAY, OUTPUT);
-  pinMode(BUTTON, INPUT);
 
   // initially switch to OFF
   digitalWrite(RELAY, LOW);        // Relay OFF
@@ -615,13 +563,14 @@ void setup() {
   }
 
   // we will wait 3s for button presses to deliberately enter CONFIG mode
-  SignalLed.start(100, KNOBBLINK);
+  SignalLed.start(KNOBBLINK, 100);
   uint32_t t0 = millis();
 
   while (millis() - t0 <= 3000) {
     SignalLed.update();
+    button.update();
     // Button pressed?
-    if (Debouncer(digitalRead(BUTTON))) {
+    if (button.getEvent() != BE_NONE) {
       // YES. Force CONFIG mode and leave. 
       confcnt = 0;
       break;
@@ -644,7 +593,7 @@ void setup() {
   if (confcnt<4) {
     // YES. Switch to CONFIG and start special blink pattern,
     mode = CONFIG;
-    SignalLed.start(100, CONFIGBLINK);
+    SignalLed.start(CONFIGBLINK, 100);
 
     // Set up access point mode. First, create AP SSID from flash ID,
 
@@ -652,9 +601,9 @@ void setup() {
     WiFi.softAP(APssid, "Maelstrom");
 
     // Register URLs for functions on web page.
-    server.on("/", handleRoot);         // Main page
-    server.on("/reset", handleRestart); // Reset button on page
-    server.on("/save", handleSave);     // Save button on page
+    server.on("/", HTTP_GET, handleRoot);         // Main page
+    server.on("/reset", HTTP_GET, handleRestart); // Reset button on page
+    server.on("/save", HTTP_GET, handleSave);     // Save button on page
 
     // Start web server.
     server.begin();
@@ -716,22 +665,12 @@ void setup() {
   MBUlogLvl = LOG_LEVEL_VERBOSE;
   LOGDEVICE = &tl;
   tl.begin(APssid);
-  tl.update();
 #endif
 
   // Default ON?
   if (configFlags & 0x0001) {
     SetState(0, DEVNAME, true, 255);
   }
-}
-
-// -----------------------------------------------------------------------------
-// Debounce routine for button. Gets digitalRead() as input.
-// -----------------------------------------------------------------------------
-bool Debouncer(bool raw) {
-  static uint16_t State = 0;
-  State = (State<<1)|(!raw)|0xE000;
-  return(State==0xF000);
 }
 
 #if DEVICETYPE == GOSUND_SP1
@@ -795,19 +734,21 @@ void loop() {
 
 #if TELNET_LOG == 1
   // Handle telnet connections
-  tl.update();
 #endif
 
   // Update blinking LED, if any
   SignalLed.update();
 
+  // Update button state
+  button.update();
+
   // RUN mode?
   if (mode == RUN) {
-    // YES. Check Hue and button requests.
+    // YES. Check Hue requests.
     fauxmo.handle();
 
     // If button pressed, toggle Relay/LED
-    if (Debouncer(digitalRead(BUTTON))) {
+    if (button.getEvent() != BE_NONE) {
       SetState(0, DEVNAME, !Testschalter, 255);
     }
 
@@ -876,16 +817,13 @@ void loop() {
       }
 #endif
     }
-  } else {
-    // NO. CONFIG mode - listen to web requests only.
-    server.handleClient();
   }
 }
 
 // -----------------------------------------------------------------------------
 // handleRoot - bring out configuration page
 // -----------------------------------------------------------------------------
-void handleRoot() {
+void handleRoot(AsyncWebServerRequest *request) {
   // Setup HTML with embedded values from EEPROM - if any.
   String page = "<!DOCTYPE html><html lang=\"en\"><head><meta charset=\"utf-8\">" \
     "<title>Smart socket setup</title>" \
@@ -924,26 +862,31 @@ void handleRoot() {
     "</form></body></html>";
 
   // Send out page
-  server.send(200, "text/html", page);
+  request->send(200, "text/html", page);
 }
 
 // -----------------------------------------------------------------------------
 // handleRestart - reset device on web page request (user pressed Reset button)
 // -----------------------------------------------------------------------------
-void handleRestart() {
+void handleRestart(AsyncWebServerRequest *request) {
   ESP.restart();
 }
 
 // -----------------------------------------------------------------------------
 // handleSave - get user input from web page and store in EEPROM and config parameters
 // -----------------------------------------------------------------------------
-void handleSave() {
+void handleSave(AsyncWebServerRequest *request) {
 
   // Get user inputs
-  server.arg("ssid").toCharArray(C_SSID, PARMLEN);
-  server.arg("pwd").toCharArray(C_SSID, PARMLEN);
-  server.arg("device").toCharArray(C_SSID, PARMLEN);
-  server.arg("otapwd").toCharArray(C_SSID, PARMLEN);
+  String m;
+  m = request->getParam("ssid")->value();
+  m.toCharArray(C_SSID, PARMLEN);
+  m = request->getParam("pwd")->value();
+  m.toCharArray(C_SSID, PARMLEN);
+  m = request->getParam("device")->value();
+  m.toCharArray(C_SSID, PARMLEN);
+  m = request->getParam("otapwd")->value();
+  m.toCharArray(C_SSID, PARMLEN);
 
   // Write to EEPROM
   uint16_t addr = 16;
@@ -957,6 +900,6 @@ void handleSave() {
   EEPROM.commit();
 
   // re-display configuration web page
-  handleRoot();
+  handleRoot(request);
 }
 
