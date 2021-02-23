@@ -44,7 +44,7 @@ size_t TelnetLog::write(uint8_t c) {
   for (auto client : TL_Client) {
     if (client->connected()) { // } && client->canSend()) {
       while (!client->canSend()) yield();
-      client->write((const char *)buf, 1);
+      client->write((const char *)buf, 1, ASYNC_WRITE_FLAG_COPY);
     }
   }
   return 1;
@@ -55,7 +55,7 @@ size_t TelnetLog::write(const uint8_t *buffer, size_t len) {
   for (auto client : TL_Client) {
     if (client->connected()) { // } && client->canSend()) {
       while (!client->canSend()) yield();
-      client->write((const char *)buffer, len);
+      client->write((const char *)buffer, len, ASYNC_WRITE_FLAG_COPY);
     }
   }
   return len;
@@ -76,19 +76,15 @@ void TelnetLog::handleNewClient(void *srv, AsyncClient* newClient) {
 
     snprintf(buffer, 80, "Welcome to'%s'!\n", s->myLabel);
     newClient->add(buffer, strlen(buffer));
-    newClient->send();
         
     snprintf(buffer, 80, "Millis since start: %ul\n", (uint32_t)millis());
     newClient->add(buffer, strlen(buffer));
-    newClient->send();
         
     snprintf(buffer, 80, "Free heap RAM: %ul\n", ESP.getFreeHeap());
     newClient->add(buffer, strlen(buffer));
-    newClient->send();
 
     snprintf(buffer, 80, "Server IP: %d.%d.%d.%d\n", WiFi.localIP()[0], WiFi.localIP()[1], WiFi.localIP()[2], WiFi.localIP()[3]);
     newClient->add(buffer, strlen(buffer));
-    newClient->send();
 
     memset(buffer, '-', 80);
     buffer[78] = '\n';

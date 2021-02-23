@@ -111,7 +111,7 @@ void handleSave(AsyncWebServerRequest *request);
 void handleRestart(AsyncWebServerRequest *request);
 void handleRoot(AsyncWebServerRequest *request);
 bool Debouncer(bool raw);
-void SetState(uint8_t device_id, const char * device_name, bool state, uint8_t value);
+void SetState(uint8_t device_id, const char * device_name, bool state, uint8_t value, unsigned int hue = 0, unsigned int sat = 0, unsigned int val = 0);
 void wifiSetup();
 
 #if DEVICETYPE == GOSUND_SP1
@@ -258,7 +258,7 @@ void wifiSetup(const char *hostname) {
 // -----------------------------------------------------------------------------
 // Change state of device ON<-->OFF
 // -----------------------------------------------------------------------------
-void SetState(uint8_t device_id, const char * device_name, bool state, uint8_t value) {
+void SetState(uint8_t device_id, const char * device_name, bool state, uint8_t value, unsigned int hue, unsigned int sat, unsigned int val) {
   if (state) { // ON
 #if TELNET_LOG == 1
     LOG_I("Switch ON\n");
@@ -622,7 +622,7 @@ void setup() {
     fauxmo.enable(true);              // get visible.
     fauxmo.addDevice(DEVNAME);        // Set Hue name
     fauxmo.onSetState(SetState);      // link to switch callback
-    fauxmo.setState(DEVNAME, false, 255);      // set OFF state
+    fauxmo.setState(DEVNAME, false, (uint8_t)255);      // set OFF state
 
     // ArduinoOTA setup
     ArduinoOTA.setHostname(DEVNAME);  // Set OTA host name
