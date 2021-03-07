@@ -13,13 +13,11 @@ TelnetLog::TelnetLog(uint16_t p, uint8_t mc) {
 
 TelnetLog::~TelnetLog() {
   delete TL_Server;
-  // Loop over clients
   for (auto it : TL_Client) {
-    it->stop();
-    it->close(true);
     delete it;
   }
-  std::vector<AsyncClient *>().swap(TL_Client);
+  TL_Client.clear();
+  std::vector<ClientList *>().swap(TL_Client);
 }
 
 void TelnetLog::begin(const char * label) {
@@ -29,22 +27,18 @@ void TelnetLog::begin(const char * label) {
 }
 
 void TelnetLog::end() {
-  // Loop over clients
-  for (auto client : TL_Client) {
-    client->stop();
-    client->close();
-    delete client;
-  }
   TL_Server->end();
+  for (auto it : TL_Client) {
+    delete it;
+  }
+  TL_Client.clear();
 }
 
 size_t TelnetLog::write(uint8_t c) {
-    uint8_t buf[2] =  { c, 0 };
   // Loop over clients
-  for (auto client : TL_Client) {
-    if (client->connected()) { // } && client->canSend()) {
-      while (!client->canSend()) yield();
-      client->write((const char *)buf, 1, ASYNC_WRITE_FLAG_COPY);
+  for (auto cl : TL_Client) {
+    if (cl->client->connected()) { // } && client->canSend()) {
+      cl->buffer->push_back(c);
     }
   }
   return 1;
@@ -52,10 +46,9 @@ size_t TelnetLog::write(uint8_t c) {
 
 size_t TelnetLog::write(const uint8_t *buffer, size_t len) {
   // Loop over clients
-  for (auto client : TL_Client) {
-    if (client->connected()) { // } && client->canSend()) {
-      while (!client->canSend()) yield();
-      client->write((const char *)buffer, len, ASYNC_WRITE_FLAG_COPY);
+  for (auto cl : TL_Client) {
+    if (cl->client->connected()) { // } && client->canSend()) {
+      cl->buffer->push_back(buffer, len);
     }
   }
   return len;
@@ -68,19 +61,22 @@ void TelnetLog::handleNewClient(void *srv, AsyncClient* newClient) {
   // Space left?
   if (s->TL_Client.size() < s->TL_maxClients) {
     // add to list
-    s->TL_Client.push_back(newClient);
+    ClientList *c = new ClientList(4096, newClient);
+    s->TL_Client.push_back(c);
 	
     // register events
     newClient->onData(&handleData, srv);
+    newClient->onPoll(&handlePoll, srv);
+    newClient->onAck(&handleAck, srv);
     newClient->onDisconnect(&handleDisconnect, srv);
 
-    snprintf(buffer, 80, "Welcome to'%s'!\n", s->myLabel);
+    snprintf(buffer, 80, "Welcome to '%s'!\n", s->myLabel);
     newClient->add(buffer, strlen(buffer));
         
     snprintf(buffer, 80, "Millis since start: %ul\n", (uint32_t)millis());
     newClient->add(buffer, strlen(buffer));
         
-    snprintf(buffer, 80, "Free heap RAM: %ul\n", ESP.getFreeHeap());
+    snprintf(buffer, 80, "Free heap RAM: %d\n", ESP.getFreeHeap());
     newClient->add(buffer, strlen(buffer));
 
     snprintf(buffer, 80, "Server IP: %d.%d.%d.%d\n", WiFi.localIP()[0], WiFi.localIP()[1], WiFi.localIP()[2], WiFi.localIP()[3]);
@@ -90,6 +86,10 @@ void TelnetLog::handleNewClient(void *srv, AsyncClient* newClient) {
     buffer[78] = '\n';
     buffer[79] = 0;
     newClient->add(buffer, strlen(buffer));
+
+    snprintf(buffer, 80, "RingBuf size: %d\n", c->buffer->capacity());
+    newClient->add(buffer, strlen(buffer));
+
     newClient->send();
   } else {
     // No, maximum number of clients reached
@@ -102,10 +102,9 @@ void TelnetLog::handleNewClient(void *srv, AsyncClient* newClient) {
 void TelnetLog::handleDisconnect(void *srv, AsyncClient *c) {
   TelnetLog *s = reinterpret_cast<TelnetLog *>(srv);
   for (auto it = s->TL_Client.begin(); it != s->TL_Client.end();) {
-    if (*it == c) {
+    if ((*it)->client == c) {
+      delete (*it);
       s->TL_Client.erase(it);
-      c->close(true);
-      delete c;
       it = s->TL_Client.end();
     } else {
       it++;
@@ -116,3 +115,39 @@ void TelnetLog::handleDisconnect(void *srv, AsyncClient *c) {
 void TelnetLog::handleData(void *srv, AsyncClient* client, void *data, size_t len) {
   // Do nothing for now, ignore data
 }
+
+void TelnetLog::sendBytes(TelnetLog *s, AsyncClient *client) {
+  if (client->connected()) {
+    size_t numBytes = client->space();
+    if (numBytes) {
+      for (auto it : s->TL_Client) {
+        if (it->client == client) {
+          size_t numSend = it->buffer->size();
+          if (numSend && client->canSend()) {
+            if (numSend <= numBytes) {
+              client->write((const char *)it->buffer->data(), numSend, ASYNC_WRITE_FLAG_COPY);
+              it->buffer->pop(numSend);
+            } else {
+              client->write((const char *)it->buffer->data(), numBytes, ASYNC_WRITE_FLAG_COPY);
+              it->buffer->pop(numBytes);
+            }
+            break;
+          }
+          break;
+        }
+      }
+    }
+  }
+
+}
+
+void TelnetLog::handlePoll(void *srv, AsyncClient *client) {
+  TelnetLog *s = reinterpret_cast<TelnetLog *>(srv);
+  sendBytes(s, client);
+}
+
+void TelnetLog::handleAck(void *srv, AsyncClient *client, size_t len, uint32_t aTime) {
+  TelnetLog *s = reinterpret_cast<TelnetLog *>(srv);
+  sendBytes(s, client);
+}
+

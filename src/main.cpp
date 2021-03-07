@@ -259,6 +259,7 @@ void wifiSetup(const char *hostname) {
 // Change state of device ON<-->OFF
 // -----------------------------------------------------------------------------
 void SetState(uint8_t device_id, const char * device_name, bool state, uint8_t value, unsigned int hue, unsigned int sat, unsigned int val) {
+  LOG_D("SetState got: value=%d, p1=%d, p2=%d, p3=%d\n", (unsigned int)value, hue, sat, val);
   if (state) { // ON
 #if TELNET_LOG == 1
     LOG_I("Switch ON\n");
@@ -495,6 +496,7 @@ ModbusMessage FC43(ModbusMessage request) {
 // -----------------------------------------------------------------------------
 void setup() {
   uint8_t confcnt = 0;     // count necessary config variables
+  char buffer[64];
 
   // Define GPIO input/output direction
   pinMode(SIGNAL_LED, OUTPUT);
@@ -664,7 +666,8 @@ void setup() {
   // Init telnet server
   MBUlogLvl = LOG_LEVEL_VERBOSE;
   LOGDEVICE = &tl;
-  tl.begin(APssid);
+  snprintf(buffer, 64, "%s (%s)", DEVNAME, APssid);
+  tl.begin(buffer);
 #endif
 
   // Default ON?
@@ -734,6 +737,7 @@ void loop() {
 
 #if TELNET_LOG == 1
   // Handle telnet connections
+  // tl.update();
 #endif
 
   // Update blinking LED, if any
