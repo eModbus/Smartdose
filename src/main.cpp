@@ -44,7 +44,6 @@
 #include "Buttoner.h"
 #if TELNET_LOG == 1
 #include "TelnetLogAsync.h"
-#define LOCAL_LOG_LEVEL LOG_LEVEL_VERBOSE
 #include "Logging.h"
 #endif
 #if MODBUS_SERVER == 1
@@ -217,7 +216,7 @@ char DEVNAME[PARMLEN];
 char O_PWD[PARMLEN];
 
 #if TELNET_LOG == 1
-TelnetLog tl(23, 2);
+TelnetLog tl(23, 2, 3000);
 #endif
 
 // SIGNAL_LED is the blinking one

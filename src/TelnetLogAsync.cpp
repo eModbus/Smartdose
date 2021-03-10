@@ -4,9 +4,10 @@
 // =================================================================================================
 #include "TelnetLogAsync.h"
 
-TelnetLog::TelnetLog(uint16_t p, uint8_t mc) {
+TelnetLog::TelnetLog(uint16_t p, uint8_t mc, size_t rbSize) {
   TL_maxClients = mc;
   TL_Server = new AsyncServer(p);
+  myRBsize = rbSize;
   TL_Client.clear();
   TL_Server->onClient(&handleNewClient, (void *)this);
 }
@@ -61,7 +62,7 @@ void TelnetLog::handleNewClient(void *srv, AsyncClient* newClient) {
   // Space left?
   if (s->TL_Client.size() < s->TL_maxClients) {
     // add to list
-    ClientList *c = new ClientList(4096, newClient);
+    ClientList *c = new ClientList(s->myRBsize, newClient);
     s->TL_Client.push_back(c);
 	
     // register events
@@ -85,9 +86,6 @@ void TelnetLog::handleNewClient(void *srv, AsyncClient* newClient) {
     memset(buffer, '-', 80);
     buffer[78] = '\n';
     buffer[79] = 0;
-    newClient->add(buffer, strlen(buffer));
-
-    snprintf(buffer, 80, "RingBuf size: %d\n", c->buffer->capacity());
     newClient->add(buffer, strlen(buffer));
 
     newClient->send();

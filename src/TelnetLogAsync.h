@@ -27,7 +27,7 @@ using std::vector;
 
 class TelnetLog : public Print {
 public:
-  TelnetLog(uint16_t port, uint8_t maxClients);
+  TelnetLog(uint16_t port, uint8_t maxClients, size_t rbSize = 256);
   ~TelnetLog();
   void begin(const char *label);
   void end();
@@ -54,10 +54,11 @@ protected:
       }
     };
     // Telnet definitions
-    uint8_t TL_maxClients;
-    AsyncServer *TL_Server;
-    std::vector<ClientList *> TL_Client;
-    char myLabel[64];
+    uint8_t TL_maxClients;                     // max. number of concurrent clients allowed
+    AsyncServer *TL_Server;                    // Hook for the AsyncServerTCP
+    std::vector<ClientList *> TL_Client;       // List of clients connected
+    char myLabel[64];                          // Welcome label to be shown to new clients
+    size_t myRBsize;                           // Size of client'S circular buffer
     static void handleNewClient(void *srv, AsyncClient *client);
     static void handleDisconnect(void *srv, AsyncClient *client);
     static void handlePoll(void *srv, AsyncClient *client);

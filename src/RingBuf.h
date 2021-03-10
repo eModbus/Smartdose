@@ -22,7 +22,6 @@ using std::lock_guard;
 #include <iterator>
 
 // RingBuf implements a circular buffer of chosen size.
-// For speed and usability reasons the internal buffer is twice the size of the requested!
 // No exceptions thrown at all. Memory allocation failures will result in a const
 // buffer pointing to the static "nilBuf"!
 // template <typename T>
@@ -59,8 +58,6 @@ public:
   size_t size();
 
   // data: get start address of the elements in buffer
-  // WARNING! due to the nature of the rolling buffer, this address is VOLATILE and needs to be 
-  //          read again every time the buffer is used! Else old data may be read.
   const T *data();
 
   // empty: returns true if no elements are in the buffer
@@ -145,6 +142,7 @@ protected:
   std::mutex m;              // Mutex to protect pop, clear and push_back operations
 #endif
   void setFail();            // Internal function to set the object to nilBuf
+  void moveFront(size_t numElements); // Move buffer far left internally
 };
 
 template <typename T>
@@ -174,7 +172,7 @@ RingBuf<T>::operator bool() {
 // Constructor: allocate a buffer twice the requested size
 template <typename T>
 RingBuf<T>::RingBuf(size_t size, bool p) :
-  RB_len(size * 2),
+  RB_len(size),
   RB_usable(size),
   RB_preserve(p),
   RB_elementSize(sizeof(T)) {
@@ -317,17 +315,21 @@ size_t RingBuf<T>::pop(size_t numElements) {
     } else {
       LOCK_GUARD(cLock, m);
       // No, the buffer needs to be emptied partly only
-      RB_begin += numElements;
-      // Is begin now pointing into the upper half?
-      if (RB_begin >= (RB_buffer + RB_usable)) {
-        // Yes. Move begin and end down again
-        RB_begin -= RB_usable;
-        RB_end -= RB_usable;
-      }
+      moveFront(numElements);
     }
     return numElements;
   }
   return 0;
+}
+
+// moveFront: shift left buffer contents by a given number of elements.
+// (used internally only)
+template <typename T>
+void RingBuf<T>::moveFront(size_t numElements) {
+  RB_begin += numElements;
+  memmove(RB_buffer, RB_begin, (RB_end - RB_begin) * RB_elementSize);
+  RB_begin = RB_buffer;
+  RB_end -= numElements;
 }
 
 // push_back(single element): add one element to the buffer, potentially discarding previous ones
@@ -345,23 +347,10 @@ bool RingBuf<T>::push_back(const T c) {
         return false;
       }
       // We need to drop the oldest element begin is pointing to
-      RB_begin++;
-      // Overflow?
-      if (RB_begin >= (RB_buffer + RB_usable)) {
-        RB_begin = RB_buffer;
-        RB_end = RB_begin + RB_usable - 1;
-      }
+      moveFront(1);
     }
     // Now add the element
     *RB_end = c;
-    // Is end pointing to the second half?
-    if (RB_end >= (RB_buffer + RB_usable)) {
-      // Yes. Add the element to the lower half as well
-      *(RB_end - RB_usable) = c;
-    } else {
-      // No, we need to add it to the upper half
-      *(RB_end + RB_usable) = c;
-    }
     RB_end++;
   }
   return true;
@@ -391,34 +380,10 @@ bool RingBuf<T>::push_back(const T *data, size_t size) {
         size = RB_usable;
       }
       // Make room for the data
-      RB_begin += size - capacity();
-      if (RB_begin >= (RB_buffer + RB_usable)) {
-        RB_begin -= RB_usable;
-        RB_end -= RB_usable;
-      }
+      moveFront(size - capacity());
     }
-    // Yes. copy it in
+    // Now copy it in
     memcpy(RB_end, data, size * RB_elementSize);
-    // Also copy to the other half. Are we in the upper?
-    if (RB_end >= (RB_buffer + RB_usable)) {
-      // Yes, simply copy it into the lower
-      memcpy(RB_end - RB_usable, data, size * RB_elementSize);
-    } else {
-      // Special case: end + usable + size could be more than buffer + len can take.
-      // In this case we will have to split the data to have the overlap copied to
-      // the start of buffer!
-      if ((RB_end + RB_usable + size) <= (RB_buffer + RB_len)) {
-        // All fine, it still fits
-        memcpy(RB_end + RB_usable, data, size * RB_elementSize);
-      } else {
-        // Does not fit completely, we need to do a split copy
-        // First part up to buffer + len
-        uint16_t firstPart = RB_len - (RB_end - RB_buffer + RB_usable);
-        memcpy(RB_end + RB_usable, data, firstPart * RB_elementSize);
-        // Second part (remainder) 
-        memcpy(RB_buffer, data + firstPart, (size - firstPart) * RB_elementSize);
-      }
-    }
     RB_end += size;
   }
   return true;
