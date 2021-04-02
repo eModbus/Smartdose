@@ -40,6 +40,7 @@
 #include <ESPAsyncWebServer.h>
 #include "fauxmoESP.h"
 #include <EEPROM.h>
+#include <time.h>
 #include "Blinker.h"
 #include "Buttoner.h"
 #if TELNET_LOG == 1
@@ -81,6 +82,11 @@
 // Time between (energy) monitor updates in ms
 #define UPDATE_TIME 5000
 
+// NTP definitions
+// #define MY_NTP_SERVER "de.pool.ntp.org"
+#define MY_NTP_SERVER "fritz.box"
+#define MY_TZ "CET-1CEST-2,M3.5.0/2:00,M10.5.0/3:00"
+
 // ================= No user definable values below this line ===================
 
 // Operations modes
@@ -110,7 +116,7 @@ void handleSave(AsyncWebServerRequest *request);
 void handleRestart(AsyncWebServerRequest *request);
 void handleRoot(AsyncWebServerRequest *request);
 bool Debouncer(bool raw);
-void SetState(uint8_t device_id, const char * device_name, bool state, uint8_t value, unsigned int hue = 0, unsigned int sat = 0, unsigned int val = 0);
+void SetState(uint8_t device_id, const char * device_name, bool state, uint8_t value);
 void wifiSetup();
 
 #if DEVICETYPE == GOSUND_SP1
@@ -257,8 +263,7 @@ void wifiSetup(const char *hostname) {
 // -----------------------------------------------------------------------------
 // Change state of device ON<-->OFF
 // -----------------------------------------------------------------------------
-void SetState(uint8_t device_id, const char * device_name, bool state, uint8_t value, unsigned int hue, unsigned int sat, unsigned int val) {
-  LOG_D("SetState got: value=%d, p1=%d, p2=%d, p3=%d\n", (unsigned int)value, hue, sat, val);
+void SetState(uint8_t device_id, const char * device_name, bool state, uint8_t value) {
   if (state) { // ON
 #if TELNET_LOG == 1
     LOG_I("Switch ON\n");
@@ -579,6 +584,9 @@ void setup() {
   }
   SignalLed.stop();
 
+  // Start NTP
+  configTime(MY_TZ, MY_NTP_SERVER); 
+
   // Create AP SSID from flash ID,
   strcpy(APssid, "Socket_XXXXXX");
   long id = ESP.getChipId();
@@ -734,11 +742,6 @@ void loop() {
   // Check for OTA update requests
   ArduinoOTA.handle();
 
-#if TELNET_LOG == 1
-  // Handle telnet connections
-  // tl.update();
-#endif
-
   // Update blinking LED, if any
   SignalLed.update();
 
@@ -757,12 +760,14 @@ void loop() {
 
     // New read due?
     if ((millis() - last) > update_interval) {
+#if TELNET_LOG == 1
       if (oneTime) {
         oneTime--;
         if (!oneTime) {
           HEXDUMP_V("EEPROM", EEPROM.getConstDataPtr(), EEPROM.length());
         }
       }
+#endif
 #if DEVICETYPE == GOSUND_SP1
       unsigned long int calcLast = millis() - last;
 #endif
@@ -798,8 +803,14 @@ void loop() {
 #if TELNET_LOG == 1
       // Output only if a client is connected
       if (tl.isActive()) {
+        time_t now = time(NULL);
+        tm tm;
+        localtime_r(&now, &tm);           // update the structure tm with the current time
         // Write data to the telnet client(s), if any
-        tl.printf("%3s for %5d:%02d:%02d   Run time %5d:%02d:%02d    ON time %5d:%02d:%02d\n",
+        tl.printf("%02d:%02d:%02d %3s %d:%02d:%02d | Run %d:%02d:%02d | ON %d:%02d:%02d\n",
+          tm.tm_hour,
+          tm.tm_min,
+          tm.tm_sec,
           Testschalter ? "ON" : "OFF",
           stateTime.getHour(),
           stateTime.getMinute(),
@@ -885,11 +896,11 @@ void handleSave(AsyncWebServerRequest *request) {
   m = request->getParam("ssid")->value();
   m.toCharArray(C_SSID, PARMLEN);
   m = request->getParam("pwd")->value();
-  m.toCharArray(C_SSID, PARMLEN);
+  m.toCharArray(C_PWD, PARMLEN);
   m = request->getParam("device")->value();
-  m.toCharArray(C_SSID, PARMLEN);
+  m.toCharArray(DEVNAME, PARMLEN);
   m = request->getParam("otapwd")->value();
-  m.toCharArray(C_SSID, PARMLEN);
+  m.toCharArray(O_PWD, PARMLEN);
 
   // Write to EEPROM
   uint16_t addr = 16;
