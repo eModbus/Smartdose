@@ -135,7 +135,6 @@ unsigned long int highPulse = HIGH_PULSE;
 #if MODBUS_SERVER == 1
 ModbusMessage FC03(ModbusMessage request);
 ModbusMessage FC06(ModbusMessage request);
-ModbusMessage FC42(ModbusMessage request);
 #if DEVICETYPE == GOSUND_SP1
 ModbusMessage FC43(ModbusMessage request);
 #endif
@@ -155,9 +154,7 @@ uint16_t configFlags;         // 16 configuration flags
 struct Measure {
   double measured;            // Observed value
   float factor;               // correction factor
-  uint32_t count;             // Count of samples while sampling
-  float sampleSum;            // sum of sampled correction values
-  Measure() : measured(0.0), factor(1.0), count(0), sampleSum(0.0) {}
+  Measure() : measured(0.0), factor(1.0) {}
 };
 
 #define VOLTAGE 0
@@ -219,7 +216,6 @@ TimeCount onTime;
 #if MODBUS_SERVER == 1
 ModbusServerTCPasync MBserver;
 ModbusMessage Response;
-bool pendingEEPROMchange = false;
 #endif
 
 // char arrays for configuration parameters
@@ -401,10 +397,10 @@ ModbusMessage FC06(ModbusMessage request) {
     }
   // Also okay: 2 - flag word
   } else if (address == 2) {
-    // Write to EEPROM shadow RAM only - FC42 may make it persistent
-    pendingEEPROMchange = true;
+    // Write to EEPROM
     configFlags = value & CONF_MASK;
     EEPROM.put(2, value & CONF_MASK);
+    EEPROM.commit();
     response = ECHO_RESPONSE;
 #if DEVICETYPE == GOSUND_SP1
   // On the GOSUND_SP1 we may reset the accumulated power consumption on word 9
@@ -426,24 +422,6 @@ ModbusMessage FC06(ModbusMessage request) {
   return response;
 }
 
-// -----------------------------------------------------------------------------
-// FC42. Fix changed parameters in EEPROM
-// -----------------------------------------------------------------------------
-ModbusMessage FC42(ModbusMessage request) {
-  ModbusMessage response;
-#if TELNET_LOG == 1
-  LOG_D("FC42 received. pEc=%d\n", pendingEEPROMchange ? 1 : 0);
-#endif
-  if (pendingEEPROMchange) {
-    EEPROM.commit();
-    pendingEEPROMchange = false;
-    response.setError(request.getServerID(), request.getFunctionCode(), SUCCESS);
-  } else {
-    response.setError(request.getServerID(), request.getFunctionCode(), NEGATIVE_ACKNOWLEDGE);
-  }
-  return response;
-}
-
 #if DEVICETYPE == GOSUND_SP1
 // -----------------------------------------------------------------------------
 // FC43. Power meter adjustment
@@ -452,17 +430,10 @@ ModbusMessage FC43(ModbusMessage request) {
   ModbusMessage response;
   uint8_t type = 0;           // 0:volts, 1:amps, 2:watts
   float value = 0.0;          // Real value sent in message
-  float factor = 0.0;         // Sampled factor for this value
-  bool isReset = false;       // 
 
   // Read the type byte
   request.get(2, type);
-  // If not reset (no further data), read value
-  if (request.size() == 7) {
-    request.get(3, value);
-  } else {
-    isReset = true;
-  }
+  request.get(3, value);
 
 #if TELNET_LOG == 1
   LOG_D("FC43 got type=%d, value=%f\n", (unsigned int)type, value);
@@ -473,35 +444,10 @@ ModbusMessage FC43(ModbusMessage request) {
 
   // Is it a valid type?
   if (type >=0 && type <=2) {
-    // Yes. did we get a value?
-    if (isReset) {
-      // No. Reset all sampled values and factor
-      measures[type].factor = 1.0;
-      measures[type].sampleSum = 0.0;
-      measures[type].count = 0;
-      EEPROM.put(4 + 4 * type, 1.0);
-      pendingEEPROMchange = true;
-    } else {
-      // Yes. Do we have a measured value to compare?
-      if (measures[type].measured != 0.0) {
-        // Yes. Calculate correction factor
-        factor = value / measures[type].measured;
-        // Add it to the summed-up factors
-        measures[type].sampleSum += factor;
-        measures[type].count++;
-        // Correction factor overall is the average of sampled factors
-        measures[type].factor = measures[type].sampleSum / measures[type].count;
-        EEPROM.put(4 + 4 * type, measures[type].factor);
-        pendingEEPROMchange = true;
-      }
-    }
-#if TELNET_LOG == 1
-    LOG_D("Result: type=%d, factor=%f, sum=%f, count=%d\n", 
-      type, 
-      measures[type].factor, 
-      measures[type].sampleSum, 
-      measures[type].count);
-#endif
+      // Yes. Write it.
+      measures[type].factor = value;
+      EEPROM.put(4 + 4 * type, value);
+      EEPROM.commit();
   } else {
     response.setError(request.getServerID(), request.getFunctionCode(), ILLEGAL_DATA_VALUE);
   }
@@ -671,7 +617,6 @@ void setup() {
     // Register server functions to read and write data
     MBserver.registerWorker(1, READ_HOLD_REGISTER, &FC03);
     MBserver.registerWorker(1, WRITE_HOLD_REGISTER, &FC06);
-    MBserver.registerWorker(1, USER_DEFINED_42, &FC42);
 #if DEVICETYPE == GOSUND_SP1
     MBserver.registerWorker(1, USER_DEFINED_43, &FC43);
 #endif
