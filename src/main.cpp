@@ -27,10 +27,14 @@
 #endif
 
 // Enable telnet server (port 23) for monitor outputs: 1=yes, 0=no
-#define TELNET_LOG 1
+#ifndef TELNET_LOG
+#define TELNET_LOG 0
+#endif
 
 // Enable Modbus server for monitoring runtime data (energy values available with a GOSUND_SP1 device only!): 1=yes, 0=no
+#ifndef MODBUS_SERVER
 #define MODBUS_SERVER 1
+#endif
 
 // Library includes
 #include <Arduino.h>
@@ -83,9 +87,12 @@
 #define UPDATE_TIME 5000
 
 // NTP definitions
-// #define MY_NTP_SERVER "de.pool.ntp.org"
+#ifndef MY_NTP_SERVER
 #define MY_NTP_SERVER "fritz.box"
+#endif
+#ifndef MY_TZ
 #define MY_TZ "CET-1CEST-2,M3.5.0/2:00,M10.5.0/3:00"
+#endif
 
 // ================= No user definable values below this line ===================
 
@@ -222,6 +229,7 @@ char DEVNAME[PARMLEN];
 char O_PWD[PARMLEN];
 
 #if TELNET_LOG == 1
+// Init Telnet logging: port 23, max. 2 concurrent clients, max. 3kB buffer
 TelnetLog tl(23, 2, 3000);
 #endif
 
@@ -376,7 +384,9 @@ ModbusMessage FC06(ModbusMessage request) {
   request.get(2, address);
   request.get(4, value);
 
+#if TELNET_LOG == 1
   LOG_D("Write %d: %d\n", address, value);
+#endif
 
   // Address valid? Switch trigger on 1
   if (address == 1) {
@@ -421,7 +431,9 @@ ModbusMessage FC06(ModbusMessage request) {
 // -----------------------------------------------------------------------------
 ModbusMessage FC42(ModbusMessage request) {
   ModbusMessage response;
+#if TELNET_LOG == 1
   LOG_D("FC42 received. pEc=%d\n", pendingEEPROMchange ? 1 : 0);
+#endif
   if (pendingEEPROMchange) {
     EEPROM.commit();
     pendingEEPROMchange = false;
@@ -452,7 +464,9 @@ ModbusMessage FC43(ModbusMessage request) {
     isReset = true;
   }
 
+#if TELNET_LOG == 1
   LOG_D("FC43 got type=%d, value=%f\n", (unsigned int)type, value);
+#endif
 
   // Set default response
   response.setError(request.getServerID(), request.getFunctionCode(), SUCCESS);
@@ -481,11 +495,13 @@ ModbusMessage FC43(ModbusMessage request) {
         pendingEEPROMchange = true;
       }
     }
+#if TELNET_LOG == 1
     LOG_D("Result: type=%d, factor=%f, sum=%f, count=%d\n", 
       type, 
       measures[type].factor, 
       measures[type].sampleSum, 
       measures[type].count);
+#endif
   } else {
     response.setError(request.getServerID(), request.getFunctionCode(), ILLEGAL_DATA_VALUE);
   }
@@ -500,7 +516,6 @@ ModbusMessage FC43(ModbusMessage request) {
 // -----------------------------------------------------------------------------
 void setup() {
   uint8_t confcnt = 0;     // count necessary config variables
-  char buffer[64];
 
   // Define GPIO input/output direction
   pinMode(SIGNAL_LED, OUTPUT);
@@ -673,6 +688,7 @@ void setup() {
   // Init telnet server
   MBUlogLvl = LOG_LEVEL_VERBOSE;
   LOGDEVICE = &tl;
+  char buffer[64];
   snprintf(buffer, 64, "%s (%s)", DEVNAME, APssid);
   tl.begin(buffer);
 #endif
@@ -736,7 +752,9 @@ void updateEnergy() {
 // Main loop
 // -----------------------------------------------------------------------------
 void loop() {
+#if TELNET_LOG == 1
   static uint8_t oneTime = 8;
+#endif
 
   static uint32_t last = millis();
   // Check for OTA update requests
