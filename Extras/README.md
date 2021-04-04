@@ -56,7 +56,7 @@ Maxcio devices have no power meter, hence will have both times identical.
 
 The final four lines are shown for Gosund devices only and are showing the current values of the power meter.
 
-#### EVERY <n>
+#### EVERY n
 EVERY is basically the same as INFO, but does repeatedly request and display the target's data.
 The ``n`` gives the number of seconds between data requests and may not be 0. 
 A value of at least 5 is sensible to not overload the devices with requests.
