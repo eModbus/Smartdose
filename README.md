@@ -91,11 +91,13 @@ Register addresses 1 to 8 are available on any device, regardless of type, where
 **Note**: all measurement values are sent as an IEEE754 float number in MSB-first byte sequence. The 4 bytes of that float will use two consecutive registers.
 
 The registers marked as write enabled can be set with the 0x06 WRITE_HOLD_REGISTER function code. 
-- Writing registers 1 and 9 will have immediate effect.
-- To alter the Control flags register persistently, after writing to it the function code 0x42 USER_DEFINED_42 has to be sent to copy the written data into the EEPROM.
+
+Since the Gosund built-in meters are somewhat inaccurate, you may modify the measured results with a constant factor at least.
+So if f.i. the voltage is off by about 3%, you can set a voltage correction factor of 1.03 to have that adjusted.
+You will need a good meter to measure the values at the smart plug outlet. 
+
+**Please be careful not to touch any powered parts to avoid electrical shock - rather leave all as is if you do not exactly know what you are doing!**
+
 - The correction factors are modified as follows: 
-  - use function code 0x43 USER_DEFINED_43 to send an observed value.
-    The first byte has to be one of 0=voltage, 1=current or 2=power, followed by a 4-byte IEEE754 float value with the observed measurement.
-  - repeated observed values will be used to calculate the average correction factor. This factor will be used immediately for feedback.
-  - leaving out the observed measurement value from the request message will reset the factor to 1.0 again.
-- To make the corretion factors persistent, the 0x42 USER_DEFINED_42 function code has to be sent as seen above.
+  - use function code 0x43 USER_DEFINED_43 to send a correction factor.
+    The first byte has to be one of 0=voltage, 1=current or 2=power, followed by a 4-byte IEEE754 float value with the factor.
