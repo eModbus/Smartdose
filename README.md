@@ -98,6 +98,6 @@ You will need a good meter to measure the values at the smart plug outlet.
 
 **Please be careful not to touch any powered parts to avoid electrical shock - rather leave all as is if you do not exactly know what you are doing!**
 
-- The correction factors are modified as follows: 
-  - use function code 0x43 USER_DEFINED_43 to send a correction factor.
-    The first byte has to be one of 0=voltage, 1=current or 2=power, followed by a 4-byte IEEE754 float value with the factor.
+The correction factors are modified as follows: 
+- use function code 0x43 USER_DEFINED_43 to send a correction factor.
+  The first byte has to be one of 0=voltage, 1=current or 2=power, followed by a 4-byte IEEE754 float value with the factor.
