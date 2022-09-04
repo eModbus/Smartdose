@@ -1,5 +1,5 @@
-// Firmware for "Gosund SP1" and "Maxcio W-DE 004"-type smart sockets.
-// Copyright 2020 by miq1@gmx.de
+// Firmware for "Gosund SP1", "Maxcio W-DE 004" and "Sonoff S26"-type smart sockets.
+// Copyright 2020-2022 by miq1@gmx.de
 //
 // Features:
 // * Imitates a Philips Hue V1 hub and a lamp (courtesy of the fauxmoESP library: https://github.com/vintlabs/fauxmoESP
@@ -21,6 +21,7 @@
 // Supported devices:
 #define GOSUND_SP1 1
 #define MAXCIO 2
+#define SONOFF_S26 3
 // Set the device to be used
 #ifndef DEVICETYPE
 #define DEVICETYPE MAXCIO
@@ -33,7 +34,7 @@
 
 // Enable Modbus server for monitoring runtime data (energy values available with a GOSUND_SP1 device only!): 1=yes, 0=no
 #ifndef MODBUS_SERVER
-#define MODBUS_SERVER 1
+#define MODBUS_SERVER 0
 #endif
 
 // Library includes
@@ -49,6 +50,7 @@
 #include "Buttoner.h"
 #if TELNET_LOG == 1
 #include "TelnetLogAsync.h"
+#define LOCAL_LOG_LEVEL LOG_LEVEL_VERBOSE
 #include "Logging.h"
 #endif
 #if MODBUS_SERVER == 1
@@ -80,6 +82,14 @@
 #define BUTTON 1
 #define SIGNAL_LED LED
 #define POWER_LED LED
+#define MAXWORD 8
+#endif
+#if DEVICETYPE == SONOFF_S26
+// Sonoff S26 (R2)
+#define LED 13
+#define RELAY 12
+#define BUTTON 0
+#define SIGNAL_LED LED
 #define MAXWORD 8
 #endif
 
@@ -167,9 +177,9 @@ Measure measures[3];
 double accumulatedWatts = 0.0;
 // Counters and interrupt functions to sample meter frequency
 volatile unsigned long int CF1tick = 0;
-void ICACHE_RAM_ATTR CF1Tick() { CF1tick++; }
+void IRAM_ATTR CF1Tick() { CF1tick++; }
 volatile unsigned long int CF_tick = 0;
-void ICACHE_RAM_ATTR CF_Tick() { CF_tick++; }
+void IRAM_ATTR CF_Tick() { CF_tick++; }
 #endif
 
 // TimeCount: class to hold time passed
@@ -273,14 +283,18 @@ void SetState(uint8_t device_id, const char * device_name, bool state, uint8_t v
     LOG_I("Switch ON\n");
 #endif
     Testschalter = true;
+#if defined(POWER_LED)
     digitalWrite(POWER_LED, LOW);
+#endif
     digitalWrite(RELAY, HIGH);
   } else { // OFF
 #if TELNET_LOG == 1
     LOG_I("Switch OFF\n");
 #endif
     Testschalter = false;
+#if defined(POWER_LED)
     digitalWrite(POWER_LED, HIGH);
+#endif
     digitalWrite(RELAY, LOW);
   }
   stateTime.reset();
@@ -465,13 +479,17 @@ void setup() {
 
   // Define GPIO input/output direction
   pinMode(SIGNAL_LED, OUTPUT);
+#if defined(POWER_LED)
   pinMode(POWER_LED, OUTPUT);
+#endif
   pinMode(RELAY, OUTPUT);
 
   // initially switch to OFF
   digitalWrite(RELAY, LOW);        // Relay OFF
   digitalWrite(SIGNAL_LED, HIGH);  // LED OFF
+#if defined(POWER_LED)
   digitalWrite(POWER_LED, HIGH);   // LED OFF
+#endif
 
   // Determine operation mode - normally RUN
   mode = RUN;
@@ -583,7 +601,9 @@ void setup() {
     wifiSetup(DEVNAME);
 
     digitalWrite(SIGNAL_LED, HIGH);   // make sure LED is OFF
+#if defined(POWER_LED)
     digitalWrite(POWER_LED, HIGH);    // make sure LED is OFF
+#endif
     Testschalter = false;             // Assume relay is OFF
 
     // Fauxmo setup.
@@ -801,8 +821,9 @@ void loop() {
 // handleRoot - bring out configuration page
 // -----------------------------------------------------------------------------
 void handleRoot(AsyncWebServerRequest *request) {
+  Serial.println("root request");
   // Setup HTML with embedded values from EEPROM - if any.
-  String page = "<!DOCTYPE html><html lang=\"en\"><head><meta charset=\"utf-8\">" \
+  PGM_P HTTP_HEAD  = PSTR("<!DOCTYPE html><html lang=\"en\"><head><meta charset=\"utf-8\">" \
     "<title>Smart socket setup</title>" \
     "<style type=\"text/css\">" \
     "label { display: block; width: 200px; font-size: small; }" \
@@ -811,32 +832,35 @@ void handleRoot(AsyncWebServerRequest *request) {
     "table {border: none;}" \
     "</style></head><body><h1>Socket setup</h1>" \
     "<form><fieldset style=\"background-color:#FFEFD5\"><legend>WiFi network</legend>" \
-    "<label for=\"ssid\">SSID</label><input type=\"text\" id=\"ssid\" name=\"ssid\" maxlength=32 size=40 required value=\"" 
-    + String(C_SSID) + // merge in home network SSID
-    "\"><br/>" \
-    "<label for=\"pwd\">Password</label><input type=\"password\" id=\"pwd\" name=\"pwd\" maxlength=32 size=40 value=\""
-    + String(C_PWD) + // merge in home network password
-    "\">" \
+    "<label for=\"ssid\">SSID</label><input type=\"text\" id=\"ssid\" name=\"ssid\" maxlength=32 size=40 required value=\"");
+  String page = FPSTR(HTTP_HEAD)
+    + String(C_SSID); // merge in home network SSID
+  PGM_P M1 = PSTR("\"><br/>" \
+    "<label for=\"pwd\">Password</label><input type=\"password\" id=\"pwd\" name=\"pwd\" maxlength=32 size=40 value=\"");
+  page += FPSTR(M1)
+    + String(C_PWD); // merge in home network password
+  PGM_P M2 = PSTR("\">" \
     "</fieldset><p/><fieldset style=\"background-color:#DCDCDC\"><legend>Device settings</legend>" \
-    "<label for=\"device\">Device name</label><input type=\"text\" id=\"device\" name=\"device\" maxlength=32 size=40 pattern=\"[A-Za-z0-9_-]+\" required value=\""
-    + String(DEVNAME) +  // merge in WeMo/OTA device name
-    "\"><br/>" \
-    "<label for=\"otapwd\">OTA Password</label><input type=\"text\" id=\"otapwd\" name=\"otapwd\" maxlength=32 size=40 value=\""
-    + String(O_PWD) +  // merge in OTA password
-    "\">" \
+    "<label for=\"device\">Device name</label><input type=\"text\" id=\"device\" name=\"device\" maxlength=32 size=40 pattern=\"[A-Za-z0-9_-]+\" required value=\"");
+  page += FPSTR(M2) + String(DEVNAME);  // merge in WeMo/OTA device name
+  PGM_P M3 = PSTR("\"><br/>" \
+    "<label for=\"otapwd\">OTA Password</label><input type=\"text\" id=\"otapwd\" name=\"otapwd\" maxlength=32 size=40 value=\"");
+  page += FPSTR(M3) + String(O_PWD);  // merge in OTA password
+  PGM_P M4 = PSTR("\">" \
     "</fieldset><p/>" \
     "<input type=\"submit\" value=\"Save\" name=\"send\" formaction=\"/save\" class=\"button\" style=\"color:black;background-color:#32CD32\">" \
-    "</form><p/><table><tr><td>ESP ID</td><td>"
-    + String(ESP.getFlashChipId(), HEX) + 
-    "</td></tr><tr><td>Speed</td><td>" 
-    + String(ESP.getFlashChipSpeed()) + 
-    "</td></tr><tr><td>Flash size</td><td>" 
-    + String(ESP.getFlashChipRealSize()) + 
-    "</td></tr><tr><td>Flash mode</td><td>" 
-    + String(ESP.getFlashChipMode()) + 
-    "</td></tr></table><p/><form>" \
+    "</form><p/><table><tr><td>ESP ID</td><td>");
+  page += FPSTR(M4) + String(ESP.getFlashChipId(), HEX);
+  PGM_P M5 = PSTR("</td></tr><tr><td>Speed</td><td>" );
+  page += FPSTR(M5) + String(ESP.getFlashChipSpeed());
+  PGM_P M6 = PSTR("</td></tr><tr><td>Flash size</td><td>");
+  page += FPSTR(M6) + String(ESP.getFlashChipRealSize());
+  PGM_P M7 =PSTR("</td></tr><tr><td>Flash mode</td><td>");
+  page += FPSTR(M7) + String(ESP.getFlashChipMode());
+  PGM_P HTTP_TAIL = PSTR("</td></tr></table><p/><form>" \
     "<input type=\"submit\" value=\"Reset\" name=\"send\" formaction=\"/reset\" class=\"button\" style=\"color:white;background-color:#FF4500\">" \
-    "</form></body></html>";
+    "</form></body></html>");
+  page += FPSTR(HTTP_TAIL);
 
   // Send out page
   request->send(200, "text/html", page);
@@ -846,6 +870,7 @@ void handleRoot(AsyncWebServerRequest *request) {
 // handleRestart - reset device on web page request (user pressed Reset button)
 // -----------------------------------------------------------------------------
 void handleRestart(AsyncWebServerRequest *request) {
+  Serial.println("restart request");
   ESP.restart();
 }
 
@@ -853,7 +878,7 @@ void handleRestart(AsyncWebServerRequest *request) {
 // handleSave - get user input from web page and store in EEPROM and config parameters
 // -----------------------------------------------------------------------------
 void handleSave(AsyncWebServerRequest *request) {
-
+  Serial.println("save request");
   // Get user inputs
   String m;
   m = request->getParam("ssid")->value();

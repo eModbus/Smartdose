@@ -1,4 +1,4 @@
-## Firmware for Gosund SP1 and Maxcio W-DE004 smart plugs
+## Firmware for Gosund SP1, Sonoff S26 (R2) and Maxcio W-DE004 smart plugs
 
 This is a standalone firmware for the named smart plugs/sockets, supporting:
 - Philips Hue hub V1 emulation (courtesy of [github.com/vintlabs/fauxmoESP](https://github.com/vintlabs/fauxmoESP), TCP port 80) to enable Alexa speech control
@@ -7,6 +7,8 @@ This is a standalone firmware for the named smart plugs/sockets, supporting:
 - Modbus server (TCP port 502) for
   - run time statictics
   - power metering (Gosund SP1 only)
+
+**NOTE: The current binary is larger than 50% of the devices' flash memory, so at the moment OTA is not possible. Working on it...**
 
 No app, no cloud service, no data transfers outside your home network
 
@@ -41,6 +43,8 @@ Finally a short blink will signal it has read the configuration data and is read
 Press the device's button firmly for a short time, then release it to switch the socket on and off. The power LED will light in ON state.
 
 #### Telnet monitor
+**NOTE: This seems to currently be broken on Sonoff devices**
+
 (This of course will only apply if you configured ``TELNET_LOG 1`` in the source code!)
 
 Use a terminal program (like the recommended ``putty`` on Windows) to connect to the device on TCP port 23. You may use the device name you configured, or the device's IP address. The terminal program should be set to "Add a CR to every LF" to have clean line breaks.
