@@ -8,8 +8,6 @@ This is a standalone firmware for the named smart plugs/sockets, supporting:
   - run time statictics
   - power metering (Gosund SP1 only)
 
-**NOTE: The current binary is larger than 50% of the devices' flash memory, so at the moment OTA is not possible. Working on it...**
-
 No app, no cloud service, no data transfers outside your home network
 
 ### First-time use
@@ -43,8 +41,6 @@ Finally a short blink will signal it has read the configuration data and is read
 Press the device's button firmly for a short time, then release it to switch the socket on and off. The power LED will light in ON state.
 
 #### Telnet monitor
-**NOTE: This seems to currently be broken on Sonoff devices**
-
 (This of course will only apply if you configured ``TELNET_LOG 1`` in the source code!)
 
 Use a terminal program (like the recommended ``putty`` on Windows) to connect to the device on TCP port 23. You may use the device name you configured, or the device's IP address. The terminal program should be set to "Add a CR to every LF" to have clean line breaks.
