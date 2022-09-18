@@ -37,13 +37,21 @@
 #define MODBUS_SERVER 0
 #endif
 
+// Disable Fauxmo for Alexa ignorance ;)
+#ifndef FAUXMO_ON
+#define FAUXMO_ON 0
+#endif
+
 // Library includes
 #include <Arduino.h>
 #include <ArduinoOTA.h>
 #include <ESP8266WiFi.h>
 #include <ESPAsyncTCP.h>
-#include <ESPAsyncWebServer.h>
+#include <ESP8266WebServer.h>
+#include <ESP8266mDNS.h>
+#if FAUXMO_ON == 1
 #include "fauxmoESP.h"
+#endif
 #include <EEPROM.h>
 #include <time.h>
 #include "Blinker.h"
@@ -119,6 +127,7 @@
 #define CONF_IS_GOSUND  0x8000
 #define CONF_HAS_TELNET 0x4000
 #define CONF_HAS_MODBUS 0x2000
+#define CONF_HAS_FAUXMO 0x1000
 
 // Blink patterns for the different modes
 // Wait for initial button press
@@ -128,13 +137,17 @@
 // Wifi connect mode:
 #define WIFIBLINK 0xFF00
 
+// Serial output while config mode is up
+#define CONFIG_TEST_OUTPUT 0
+
 // Some forward declarations
-void handleSave(AsyncWebServerRequest *request);
-void handleRestart(AsyncWebServerRequest *request);
-void handleRoot(AsyncWebServerRequest *request);
 bool Debouncer(bool raw);
 void SetState(uint8_t device_id, const char * device_name, bool state, uint8_t value);
 void wifiSetup();
+void handleRoot();
+void handleSave();
+void handleRestart();
+void handleNotFound();
 
 #if DEVICETYPE == GOSUND_SP1
 unsigned long int getFrequency();
@@ -150,10 +163,12 @@ ModbusMessage FC43(ModbusMessage request);
 #endif
 #endif
 
+#if FAUXMO_ON == 1
 fauxmoESP fauxmo;             // create Philips Hue lookalike
+#endif
 bool Testschalter;            // Relay state
 uint8_t dimValue;             // Hue dimmer value
-AsyncWebServer server(80);    // Web server on port 80
+ESP8266WebServer server(80);    // Web server on port 80
 uint8_t mode;                 // Operations mode, RUN or CONFIG
 IPAddress myIP;               // local IP address
 char APssid[64];              // Access point ID
@@ -269,6 +284,11 @@ void wifiSetup(const char *hostname) {
   }
 
   myIP = WiFi.localIP();
+  
+  // Start mDNS service
+  if (*hostname) {
+    MDNS.begin(hostname);
+  }
 
   // Connected! Stop blinking
   SignalLed.stop();
@@ -352,6 +372,9 @@ ModbusMessage FC03(ModbusMessage request) {
 #endif
 #if MODBUS_SERVER == 1
     showFlags |= CONF_HAS_MODBUS;
+#endif
+#if FAUXMO_ON == 1
+    showFlags |= CONF_HAS_FAUXMO;
 #endif
     memory.add(showFlags);
     memory.add(upTime.getHour());
@@ -582,16 +605,20 @@ void setup() {
     // YES. Switch to CONFIG and start special blink pattern,
     mode = CONFIG;
     SignalLed.start(CONFIGBLINK, 100);
-
-    // Set up access point mode. First, create AP SSID from flash ID,
+#if CONFIG_TEST_OUTPUT == 1
+    Serial.begin(115200);
+    Serial.println();
+    Serial.println("__OK__");
+#endif
 
     // Start AP.
     WiFi.softAP(APssid, "Maelstrom");
 
     // Register URLs for functions on web page.
-    server.on("/", HTTP_GET, handleRoot);         // Main page
-    server.on("/reset", HTTP_GET, handleRestart); // Reset button on page
-    server.on("/save", HTTP_GET, handleSave);     // Save button on page
+    server.on("/", handleRoot);         // Main page
+    server.on("/reset", handleRestart); // Reset button on page
+    server.on("/save", handleSave);     // Save button on page
+    server.onNotFound(handleNotFound);  // Illegal request
 
     // Start web server.
     server.begin();
@@ -606,6 +633,7 @@ void setup() {
 #endif
     Testschalter = false;             // Assume relay is OFF
 
+#if FAUXMO_ON == 1
     // Fauxmo setup.
     fauxmo.createServer(true);        // Start server
     fauxmo.setPort(80);               // use HTML port 80
@@ -613,6 +641,7 @@ void setup() {
     fauxmo.addDevice(DEVNAME);        // Set Hue name
     fauxmo.onSetState(SetState);      // link to switch callback
     fauxmo.setState(DEVNAME, false, (uint8_t)255);      // set OFF state
+#endif
 
     // ArduinoOTA setup
     ArduinoOTA.setHostname(DEVNAME);  // Set OTA host name
@@ -654,7 +683,12 @@ void setup() {
   MBUlogLvl = LOG_LEVEL_VERBOSE;
   LOGDEVICE = &tl;
   char buffer[64];
+
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wformat-truncation"
   snprintf(buffer, 64, "%s (%s)", DEVNAME, APssid);
+#pragma GCC diagnostic pop
+
   tl.begin(buffer);
 #endif
 
@@ -733,8 +767,13 @@ void loop() {
 
   // RUN mode?
   if (mode == RUN) {
+#if FAUXMO_ON == 1
     // YES. Check Hue requests.
     fauxmo.handle();
+#endif
+    
+    // Keep mDNS running
+    MDNS.update();
 
     // If button pressed, toggle Relay/LED
     if (button.getEvent() != BE_NONE) {
@@ -814,14 +853,19 @@ void loop() {
       }
 #endif
     }
+  // No, config mode. Keep the web server active
+  } else {
+    server.handleClient();
   }
 }
 
 // -----------------------------------------------------------------------------
 // handleRoot - bring out configuration page
 // -----------------------------------------------------------------------------
-void handleRoot(AsyncWebServerRequest *request) {
+void handleRoot() {
+#if CONFIG_TEST_OUTPUT == 1
   Serial.println("root request");
+#endif
   // Setup HTML with embedded values from EEPROM - if any.
   PGM_P HTTP_HEAD  = PSTR("<!DOCTYPE html><html lang=\"en\"><head><meta charset=\"utf-8\">" \
     "<title>Smart socket setup</title>" \
@@ -863,31 +907,35 @@ void handleRoot(AsyncWebServerRequest *request) {
   page += FPSTR(HTTP_TAIL);
 
   // Send out page
-  request->send(200, "text/html", page);
+  server.send(200, "text/html", page);
 }
 
 // -----------------------------------------------------------------------------
 // handleRestart - reset device on web page request (user pressed Reset button)
 // -----------------------------------------------------------------------------
-void handleRestart(AsyncWebServerRequest *request) {
+void handleRestart() {
+#if CONFIG_TEST_OUTPUT == 1
   Serial.println("restart request");
+#endif
   ESP.restart();
 }
 
 // -----------------------------------------------------------------------------
 // handleSave - get user input from web page and store in EEPROM and config parameters
 // -----------------------------------------------------------------------------
-void handleSave(AsyncWebServerRequest *request) {
+void handleSave() {
+#if CONFIG_TEST_OUTPUT == 1
   Serial.println("save request");
+#endif
   // Get user inputs
   String m;
-  m = request->getParam("ssid")->value();
+  m = server.arg("ssid");
   m.toCharArray(C_SSID, PARMLEN);
-  m = request->getParam("pwd")->value();
+  m = server.arg("pwd");
   m.toCharArray(C_PWD, PARMLEN);
-  m = request->getParam("device")->value();
+  m = server.arg("device");
   m.toCharArray(DEVNAME, PARMLEN);
-  m = request->getParam("otapwd")->value();
+  m = server.arg("otapwd");
   m.toCharArray(O_PWD, PARMLEN);
 
   // Write to EEPROM
@@ -902,6 +950,22 @@ void handleSave(AsyncWebServerRequest *request) {
   EEPROM.commit();
 
   // re-display configuration web page
-  handleRoot(request);
+  handleRoot();
 }
 
+void handleNotFound() {
+  String message = "File Not Found\n\n";
+  message += "URI: ";
+  message += server.uri();
+  message += "\nMethod: ";
+  message += (server.method() == HTTP_GET) ? "GET" : "POST";
+  message += "\nArguments: ";
+  message += server.args();
+  message += "\n";
+  for (uint8_t i = 0; i < server.args(); i++) { message += " " + server.argName(i) + ": " + server.arg(i) + "\n"; }
+  server.send(404, "text/plain", message);
+#if CONFIG_TEST_OUTPUT == 1
+  Serial.println("illegal request");
+  Serial.println(message);
+#endif
+}
