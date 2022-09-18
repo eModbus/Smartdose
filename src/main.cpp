@@ -58,7 +58,6 @@
 #include "Buttoner.h"
 #if TELNET_LOG == 1
 #include "TelnetLogAsync.h"
-#define LOCAL_LOG_LEVEL LOG_LEVEL_VERBOSE
 #include "Logging.h"
 #endif
 #if MODBUS_SERVER == 1
