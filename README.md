@@ -71,15 +71,15 @@ Timers are controlled by their Modbus register values.
 
 | Register | MSB                                   | LSB                            | Remarks  |
 |----------|---------------------------------------|--------------------------------|----------|
-| First    | Bit | Meaning <br/>                   | Bit | Meaning <br/>            |          |
-|          |   0 | 1=SUNDAY <br/>                  |   0 | 1=switch to ON, else OFF <br/>|       |
-|          |   1 | 1=MONDAY <br/>                  |   1 | reserved <br/>           |          |
-|          |   2 | 1=TUESDAY <br/>                 |   2 | reserved <br/>           |          |
-|          |   3 | 1=WEDNESDAY <br/>               |   3 | reserved <br/>           |          |
-|          |   4 | 1=THURSDAY <br/>                |   4 | reserved <br/>           |          |
-|          |   5 | 1=FRIDAY <br/>                  |   5 | reserved <br/>           |          |
-|          |   6 | 1=SATURDAY <br/>                |   6 | reserved <br/>           |          |
-|          |   7 | 1=timer active, else inactive   |   7 | reserved                 |          |
+| First    | Bit - Meaning <br/>                   | Bit - Meaning <br/>            |          |
+|          |   0 - 1=SUNDAY <br/>                  |   0 - 1=switch to ON, else OFF <br/>|       |
+|          |   1 - 1=MONDAY <br/>                  |   1 - reserved <br/>           |          |
+|          |   2 - 1=TUESDAY <br/>                 |   2 - reserved <br/>           |          |
+|          |   3 - 1=WEDNESDAY <br/>               |   3 - reserved <br/>           |          |
+|          |   4 - 1=THURSDAY <br/>                |   4 - reserved <br/>           |          |
+|          |   5 - 1=FRIDAY <br/>                  |   5 - reserved <br/>           |          |
+|          |   6 - 1=SATURDAY <br/>                |   6 - reserved <br/>           |          |
+|          |   7 - 1=timer active, else inactive   |   7 - reserved                 |          |
 | Second   | Hour to fire the timer 0..23          | Minute to fire the timer 0..59 |          |
 
 The timers are checked every 30s only, so expect inaccuracy up to that time span.
