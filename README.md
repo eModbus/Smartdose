@@ -72,7 +72,6 @@ Timers are controlled by their Modbus register values.
 | Register | MSB                                   | LSB                            | Remarks  |
 |----------|---------------------------------------|--------------------------------|----------|
 | First    | Bit | Meaning                         | Bit | Meaning                  |          |
-|          |-----|---------------------------------|--------------------------------|          |
 |          |   0 | 1=SUNDAY                        |   0 | 1=switch to ON, else OFF |          |
 |          |   1 | 1=MONDAY                        |   1 | reserved                 |          |
 |          |   2 | 1=TUESDAY                       |   2 | reserved                 |          |
@@ -81,7 +80,6 @@ Timers are controlled by their Modbus register values.
 |          |   5 | 1=FRIDAY                        |   5 | reserved                 |          |
 |          |   6 | 1=SATURDAY                      |   6 | reserved                 |          |
 |          |   7 | 1=timer active, else inactive   |   7 | reserved                 |          |
-|----------|---------------------------------------|--------------------------------|----------|
 | Second   | Hour to fire the timer 0..23          | Minute to fire the timer 0..59 |          |
 |----------|---------------------------------------|--------------------------------|----------|
 
@@ -101,6 +99,8 @@ Register addresses 1 to 8 are available on any device, regardless of type, where
 | 1        | State of switch. 0=OFF, 1-255=ON| Yes            |
 | 2        | Control flags:                  | Yes (0x0001)   |
 |          | 0x0001 - default ON after boot  |                |
+|          | 0x0800 - Timers enabled         |                |
+|          | 0x1000 - Fauxmo/Alexa  enabled  |                |
 |          | 0x2000 - Modbus server enabled  |                |
 |          | 0x4000 - Telnet server enabled  |                |
 |          | 0x8000 - is a Gosund SP1 device |                |
@@ -134,7 +134,7 @@ Register addresses 1 to 8 are available on any device, regardless of type, where
 | 47, 48   | Timer 13 data                   | Yes            |
 | 49, 50   | Timer 14 data                   | Yes            |
 | 51, 52   | Timer 15 data                   | Yes            |
-| 53, 54   | Timer 116 data                  | Yes            |
+| 53, 54   | Timer 16 data                   | Yes            |
 |----------|---------------------------------|----------------|
 
 **Note**: all measurement values are sent as an IEEE754 float number in MSB-first byte sequence. The 4 bytes of that float will use two consecutive registers.
