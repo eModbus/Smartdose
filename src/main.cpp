@@ -42,6 +42,16 @@
 #define FAUXMO_ON 0
 #endif
 
+// Enable timer functions: 1=yes, 0=no
+#ifndef TIMERS
+#define TIMERS 0
+#endif
+// Timers will need the Modbus server to work
+#if TIMERS == 1
+#undef MODBUS_SERVER
+#define MODBUS_SERVER 1
+#endif
+
 // Library includes
 #include <Arduino.h>
 #include <ArduinoOTA.h>
@@ -72,7 +82,6 @@
 #define BUTTON 3
 #define SIGNAL_LED RED_LED
 #define POWER_LED BLUE_LED
-#define MAXWORD 22
 
 // Energy monitor GPIOs
 #define SEL_PIN 12
@@ -89,7 +98,6 @@
 #define BUTTON 1
 #define SIGNAL_LED LED
 #define POWER_LED LED
-#define MAXWORD 8
 #endif
 #if DEVICETYPE == SONOFF_S26
 // Sonoff S26 (R2)
@@ -97,11 +105,13 @@
 #define RELAY 12
 #define BUTTON 0
 #define SIGNAL_LED LED
-#define MAXWORD 8
 #endif
 
 // Time between (energy) monitor updates in ms
 #define UPDATE_TIME 5000
+
+// Time between timer checks - must be below 1 minute to not let pass a timer unnoticed!
+#define TIMER_UPDATE_INTERVAL 30000
 
 // NTP definitions
 #ifndef MY_NTP_SERVER
@@ -127,6 +137,7 @@
 #define CONF_HAS_TELNET 0x4000
 #define CONF_HAS_MODBUS 0x2000
 #define CONF_HAS_FAUXMO 0x1000
+#define CONF_TIMERS     0x0800
 
 // Blink patterns for the different modes
 // Wait for initial button press
@@ -138,6 +149,16 @@
 
 // Serial output while config mode is up
 #define CONFIG_TEST_OUTPUT 0
+
+#if TIMERS == 1
+// EEPROM offsets etc. for timer data
+const uint16_t O_TIMERS = 16 + 4 * PARMLEN;
+#define ACTIVEMASK 0x80
+#define DAYMASK    0x7F
+#define ONMASK     0x01
+#endif
+// Number of timers is needed in any case (memory layout)
+#define NUM_TIMERS 16
 
 // Some forward declarations
 bool Debouncer(bool raw);
@@ -155,10 +176,19 @@ unsigned long int highPulse = HIGH_PULSE;
 #endif
 
 #if MODBUS_SERVER == 1
+// Highest addressable Modbus register
+// 8 basic data
+// 14 power measure data
+// NUM_TIMERS * 2 timer data
+const uint16_t MAXWORD(22 + NUM_TIMERS * 2);
+
 ModbusMessage FC03(ModbusMessage request);
 ModbusMessage FC06(ModbusMessage request);
 #if DEVICETYPE == GOSUND_SP1
 ModbusMessage FC43(ModbusMessage request);
+#endif
+#if TIMERS == 1
+ModbusMessage FC10(ModbusMessage request);
 #endif
 #endif
 
@@ -173,6 +203,7 @@ IPAddress myIP;               // local IP address
 char APssid[64];              // Access point ID
 uint16_t configFlags;         // 16 configuration flags
                               // 0x0001 : switch ON on boot
+uint16_t showFlags = 0;       // Modbus flags register
 
 // The following are used only for GOSUND SP1, but will be initialized always for EEPROM
 struct Measure {
@@ -195,6 +226,21 @@ void IRAM_ATTR CF1Tick() { CF1tick++; }
 volatile unsigned long int CF_tick = 0;
 void IRAM_ATTR CF_Tick() { CF_tick++; }
 #endif
+
+// Same for timers
+struct Timer_t {
+  uint8_t activeDays;         // Bit 0..6: days of week, bit 7: active/inactive flag
+  uint8_t onOff;              // Bit 0: 1=timer switches on, 0=switches off
+  uint8_t hour;               // HH24 hour of switching time
+  uint8_t minute;             // MM minutes of switching time
+  Timer_t() :
+    activeDays(0),
+    onOff(0),
+    hour(0),
+    minute(0) { }
+};
+Timer_t timers[NUM_TIMERS];
+
 
 // TimeCount: class to hold time passed
 class TimeCount {
@@ -325,26 +371,6 @@ void SetState(uint8_t device_id, const char * device_name, bool state, uint8_t v
 // FC03. React on Modbus read request
 // -----------------------------------------------------------------------------
 ModbusMessage FC03(ModbusMessage request) {
-  static constexpr uint16_t maxMemory = 
-    2                            // On/OFF state
-    + 2                          // hours since boot
-    + 1                          // minutes ~
-    + 1                          // seconds ~
-    + 2                          // hours in current state (ON/OFF)
-    + 1                          // minutes ~
-    + 1                          // seconds ~
-    + 2                          // ON hours since boot
-    + 1                          // minutes ~
-    + 1                          // seconds ~
-    // Following only for GOSUND_SP1
-#if DEVICETYPE == GOSUND_SP1
-    + 4                          // Wh
-    + 4                          // W
-    + 4                          // V
-    + 4                          // A
-#endif
-    ; // NOLINT
-  static ModbusMessage memory(maxMemory); // Temporary data storage
   ModbusMessage response;          // returned response message
 
   uint16_t address = 0;
@@ -356,37 +382,13 @@ ModbusMessage FC03(ModbusMessage request) {
 
   // Valid?
   if (address && words && ((address + words - 1) <= MAXWORD) && (words < 126)) {
-    // Yes, both okay. Set up temporary memory
-    // Delete previous content
-    memory.clear();
+    // Yes, both okay.
+    // set up response
+    response.add(request.getServerID(), request.getFunctionCode(), (uint8_t)(words * 2));
 
-    // Fill in current values
-    memory.add((uint16_t)(Testschalter ? dimValue : 0));
-    uint16_t showFlags = configFlags & CONF_MASK;
 #if DEVICETYPE == GOSUND_SP1
-    showFlags |= CONF_IS_GOSUND;
-#endif
-#if TELNET_LOG == 1
-    showFlags |= CONF_HAS_TELNET;
-#endif
-#if MODBUS_SERVER == 1
-    showFlags |= CONF_HAS_MODBUS;
-#endif
-#if FAUXMO_ON == 1
-    showFlags |= CONF_HAS_FAUXMO;
-#endif
-    memory.add(showFlags);
-    memory.add(upTime.getHour());
-    memory.add(upTime.getMinute());
-    memory.add(upTime.getSecond());
-    memory.add(stateTime.getHour());
-    memory.add(stateTime.getMinute());
-    memory.add(stateTime.getSecond());
-    memory.add(onTime.getHour());
-    memory.add(onTime.getMinute());
-    memory.add(onTime.getSecond());
-    // Following only for GOSUND_SP1
-#if DEVICETYPE == GOSUND_SP1
+    // On Gosund devices we need to set up the float array
+    ModbusMessage memory;
     memory.add((float)accumulatedWatts);
     memory.add(measures[VOLTAGE].factor);
     memory.add(measures[CURRENT].factor);
@@ -395,9 +397,66 @@ ModbusMessage FC03(ModbusMessage request) {
     memory.add((float)measures[CURRENT].measured);
     memory.add((float)measures[POWER].measured);
 #endif
-    // set up response
-    response.add(request.getServerID(), request.getFunctionCode(), (uint8_t)(words * 2));
-    response.add(memory.data() + (address - 1) * 2, words * 2);
+
+    // Loop over requested registers
+    for (uint16_t addr = address; addr < address + words; addr++) {
+      switch (addr) {
+      case 1: // socket state
+        response.add((uint16_t)(Testschalter ? dimValue : 0));
+        break;
+      case 2: // flag word
+        response.add(showFlags);
+        break;
+      case 3: // uptime hours
+        response.add(upTime.getHour());
+        break;
+      case 4: // uptime minutes and seconds
+        response.add(upTime.getMinute());
+        response.add(upTime.getSecond());
+        break;
+      case 5: // state time hours
+        response.add(stateTime.getHour());
+        break;
+      case 6: // state time minutes and seconds
+        response.add(stateTime.getMinute());
+        response.add(stateTime.getSecond());
+        break;
+      case 7: // ON time hours
+        response.add(onTime.getHour());
+        break;
+      case 8: // ON time minutes and seconds
+        response.add(onTime.getMinute());
+        response.add(onTime.getSecond());
+        break;
+      case 9 ... 22: // power meter data not present on non-Gosund devices
+#if DEVICETYPE == GOSUND_SP1
+        response.add(memory.data() + (addr - 9) * 2, 2);
+#else
+        response.add((uint16_t)0);
+#endif
+        break;
+      case 23 ... MAXWORD: // timer data may be not present as well
+#if TIMERS == 1
+        {
+          // Calculate timer slot
+          uint8_t tim = (addr - 23) / 2;
+          if (addr & 1) { // odd address
+            response.add(timers[tim].activeDays);
+            response.add(timers[tim].onOff);
+          } else { // even address
+            response.add(timers[tim].hour);
+            response.add(timers[tim].minute);
+          }
+        }
+#else
+        response.add((uint16_t)0);
+#endif
+        break;
+      default:
+        // Shouldn't get here...
+        break;
+      }
+    }
   } else {
     // No, memory violation. Return error
     response.setError(request.getServerID(), request.getFunctionCode(), ILLEGAL_DATA_ADDRESS);
@@ -457,6 +516,54 @@ ModbusMessage FC06(ModbusMessage request) {
   }
   return response;
 }
+
+#if TIMERS == 1
+// -----------------------------------------------------------------------------
+// FC10. Write timer settings
+// -----------------------------------------------------------------------------
+ModbusMessage FC10(ModbusMessage request) {
+  ModbusMessage response;
+  uint16_t addr;      // Starting address to be written
+  uint16_t words;     // Number of registers
+  uint16_t offs = 2;  // Offset for reading values from request
+
+  offs = request.get(offs, addr);  // read address
+  offs = request.get(offs, words); // read register count
+
+  // Address and range valid?
+  if (addr >= 23 && (addr + words) <= MAXWORD && words) {
+    // Seems to be okay
+    offs++;               // Skip length byte
+    Timer_t tim_temp;     // Temporary storage to check data
+    // Loop over delivered value words
+    for (uint16_t a = addr; a < addr + words; a++) {
+      uint8_t tim = (a - 23) / 2;  // Timer slot
+      if (a & 1) {  // odd address
+        offs = request.get(offs, tim_temp.activeDays);
+        offs = request.get(offs, tim_temp.onOff);
+        timers[tim].activeDays = tim_temp.activeDays; // Accept all values
+        timers[tim].onOff = tim_temp.onOff & ONMASK;    // Restrict to on/off flag
+        EEPROM[O_TIMERS + tim * sizeof(Timer_t)] = tim_temp.activeDays;
+        EEPROM[O_TIMERS + tim * sizeof(Timer_t) + 1] = tim_temp.onOff;
+      } else {      // even address
+        offs = request.get(offs, tim_temp.hour);
+        offs = request.get(offs, tim_temp.minute);
+        timers[tim].hour = tim_temp.hour % 24;        // Just 0..23
+        timers[tim].minute = tim_temp.minute % 60;    // Just 0..59
+        EEPROM[O_TIMERS + tim * sizeof(Timer_t) + 2] = tim_temp.hour;
+        EEPROM[O_TIMERS + tim * sizeof(Timer_t) + 3] = tim_temp.minute;
+      }
+    }
+    EEPROM.commit();
+    // Prepare echo response
+    response.add(request.getServerID(), request.getFunctionCode(), addr, words);
+  } else {
+    // Wrong address or number of registers
+    response.setError(request.getServerID(), request.getFunctionCode(), ILLEGAL_DATA_ADDRESS);
+  }
+  return response;
+}
+#endif
 
 #if DEVICETYPE == GOSUND_SP1
 // -----------------------------------------------------------------------------
@@ -527,6 +634,7 @@ void setup() {
   //  16 + PARMLEN : char[PARMLEN] PASS
   //  16 + 2 * PARMLEN : char[PARMLEN] DEVICENAME
   //  16 + 3 * PARMLEN : char[PARMLEN] OTA_PWD
+  //  16 + 4 * PARMLEN : Timer_t[NUM_TIMERS]
   EEPROM.begin(512);
 
   // Read magic value
@@ -567,6 +675,15 @@ void setup() {
     addr += PARMLEN;
     strncpy(O_PWD, (const char *)EEPROM.getConstDataPtr() + addr, PARMLEN);
     if (EEPROM[addr]) confcnt++;
+#if TIMERS == 1
+    // get timer values
+    for (uint8_t i = 0; i< NUM_TIMERS; ++i) {
+      timers[i].activeDays = EEPROM[O_TIMERS + i * sizeof(Timer_t)];
+      timers[i].onOff      = EEPROM[O_TIMERS + i * sizeof(Timer_t) + 1];
+      timers[i].hour       = EEPROM[O_TIMERS + i * sizeof(Timer_t) + 2];
+      timers[i].minute     = EEPROM[O_TIMERS + i * sizeof(Timer_t) + 3];
+    }
+#endif
   }
 
   // we will wait 3s for button presses to deliberately enter CONFIG mode
@@ -632,6 +749,24 @@ void setup() {
 #endif
     Testschalter = false;             // Assume relay is OFF
 
+    // Set flags register
+    showFlags = configFlags & CONF_MASK;
+#if DEVICETYPE == GOSUND_SP1
+    showFlags |= CONF_IS_GOSUND;
+#endif
+#if TELNET_LOG == 1
+    showFlags |= CONF_HAS_TELNET;
+#endif
+#if MODBUS_SERVER == 1
+    showFlags |= CONF_HAS_MODBUS;
+#endif
+#if FAUXMO_ON == 1
+    showFlags |= CONF_HAS_FAUXMO;
+#endif
+#if TIMERS == 1
+    showFlags |= CONF_TIMERS;
+#endif
+
 #if FAUXMO_ON == 1
     // Fauxmo setup.
     fauxmo.createServer(true);        // Start server
@@ -668,6 +803,9 @@ void setup() {
 #if DEVICETYPE == GOSUND_SP1
     MBserver.registerWorker(1, USER_DEFINED_43, &FC43);
 #endif
+#if TIMERS == 1
+    MBserver.registerWorker(1, WRITE_MULT_REGISTERS, &FC10);
+#endif
     // Init and start Modbus server:
     // Listen on port 502 (MODBUS standard), maximum 2 clients, 2s timeout
     MBserver.start(502, 2, 2000);
@@ -679,7 +817,7 @@ void setup() {
   }
 #if TELNET_LOG == 1
   // Init telnet server
-  MBUlogLvl = LOG_LEVEL_VERBOSE;
+  MBUlogLvl = LOG_LEVEL_ERROR;
   LOGDEVICE = &tl;
   char buffer[64];
 
@@ -754,7 +892,11 @@ void loop() {
   static uint8_t oneTime = 8;
 #endif
 
-  static uint32_t last = millis();
+  static uint32_t last = millis();   // Last time updates were made
+#if TIMERS == 1
+  static uint32_t lastTimerCheck = millis(); // Last time the timers were checked
+#endif
+
   // Check for OTA update requests
   ArduinoOTA.handle();
 
@@ -774,9 +916,17 @@ void loop() {
     // Keep mDNS running
     MDNS.update();
 
-    // If button pressed, toggle Relay/LED
-    if (button.getEvent() != BE_NONE) {
+    ButtonEvent be = button.getEvent();
+    // If button clicked, toggle Relay/LED
+    if (be == BE_CLICK) {
       SetState(0, DEVNAME, !Testschalter, 255);
+#if TIMERS == 1
+    // if held down, disarm all timers
+    } else if (be == BE_PRESS) {
+      for (uint8_t i = 0; i < NUM_TIMERS; ++i) {
+        timers[i].activeDays &= DAYMASK;
+      }
+#endif
     }
 
     // New read due?
@@ -785,7 +935,7 @@ void loop() {
       if (oneTime) {
         oneTime--;
         if (!oneTime) {
-          HEXDUMP_V("EEPROM", EEPROM.getConstDataPtr(), EEPROM.length());
+          HEXDUMP_D("EEPROM", EEPROM.getConstDataPtr(), EEPROM.length());
         }
       }
 #endif
@@ -852,6 +1002,49 @@ void loop() {
       }
 #endif
     }
+
+#if TIMERS == 1
+    // Is it time to check the timers?
+    if ((millis() - lastTimerCheck) > TIMER_UPDATE_INTERVAL) {
+      // Yes. Get day of week, hour and minute for comparisons
+      time_t now = time(NULL);
+      struct tm *tmData = localtime(&now);
+      uint8_t cHour = tmData->tm_hour;          // 0..23
+      uint8_t cMinute = tmData->tm_min;         // 0..59
+      uint8_t cWday = 1 << tmData->tm_wday;     // 0=Sunday
+      // Get switch state for comparisons
+      uint8_t cOnOff = Testschalter ? ONMASK : 0;
+      
+      // Now loop over timers to find one active and due to fire
+      for (uint8_t i = 0; i < NUM_TIMERS; ++i) {
+        // Is it active?
+        if (timers[i].activeDays & ACTIVEMASK) {
+          // Yes. Is it due?
+          if (timers[i].activeDays & cWday 
+           && timers[i].hour == cHour 
+           && timers[i].minute == cMinute) {
+            // Yes. Is the switch in the right state already?
+            if (timers[i].onOff != cOnOff) {
+              // No, we need to switch it
+              SetState(0, DEVNAME, !Testschalter, 255);
+#if TELNET_LOG == 1
+              tl.printf("Timer %d fired (%s %02X %02d:%02d)\n", 
+                i + 1,
+                timers[i].onOff ? "ON" : "OFF",
+                timers[i].activeDays,
+                timers[i].hour,
+                timers[i].minute);
+#endif
+              // There may be other timers also due, but the first rules!
+              break;
+            }
+          }
+        }
+      }
+      lastTimerCheck = millis();
+    }
+#endif
+
   // No, config mode. Keep the web server active
   } else {
     server.handleClient();

@@ -16,7 +16,6 @@
 #elif defined(ESP32)
 #include <WiFi.h>
 #include <AsyncTCP.h>
-#include <ESPAsyncWebServer.h>
 #else
 #error "TelnetLogAsync requires an ESP8266 or ESP32 to run."
 #endif
