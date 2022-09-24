@@ -1,6 +1,9 @@
 ## Linux control program
-The ``Smartdose.zip`` file contains all source files, plus a ``Makefile`` to build a ``Smartdose`` control program for the Smartdose socket firmware.
+The ``Smartdose.cpp`` file is intended to build a ``Smartdose`` control program for the Smartdose socket firmware.
 It purely is built upon the Modbus server the firmware provides, so to use it you need to have a ``#define MODBUS_SERVER 1`` in the code.
+To build it you will need the ``libeModbus`` library that can be found in the Linux examples section on [the eModbus Github repository](https://github.com/eModbus/eModbus).
+
+I have built it successfully on lUbuntu 20.04 and 22.04 and on Raspbian.
 
 ### Usage
 Running ``Smartdose`` without parameters will give you this usage hint:
@@ -8,10 +11,17 @@ Running ``Smartdose`` without parameters will give you this usage hint:
 At least one argument needed!
 
 Usage: Smartdose host[:port[:serverID]]] [cmd [cmd_parms]]
-  cmd: INFO | ON | OFF | DEFAULT | EVERY | RESET | FACTOR
+  cmd: INFO | ON | OFF | DEFAULT | EVERY | RESET | FACTOR | TIMER
   DEFAULT ON|OFF
   EVERY <seconds>
   FACTOR [V|A|W [<factor>]]
+  TIMER <n> [<arg> [<arg> [...]]]
+    n: 1..16
+    arg: ACTIVE|INACTIVE|ON|OFF|DAILY|WORKDAYS|WEEKEND|<day>|<hh24>:<mm>|CLEAR
+    day: SUN|MON|TUE|WED|THU|FRI|SAT
+    hh24: 0..23
+    mm: 0..59
+
 ```
 Whenever something is not understood by the program, or if some Modbus error is received, the program will terminate after putting out a respective message.
 
@@ -35,29 +45,49 @@ Next comes a command. If you omit it, ``INFO`` will be taken as the default.
 #### INFO
 This command reads out all Modbus registers the sockets are providing and will print the contents in interpreted form.
 On Gosund devices, in addition to the basic switch data the power meter data is printed.
+If ``TIMERS`` is activated, a list of the 16 timers will be added.
 ```
-micha@LinuxBox:~/Smartdose$ ./Smartdose Gosund02
-Using 192.168.178.51:502:1
-Gosund device Modbus server Default: ON
-Running since   24:12:20
-ON time         11:06:45
-ON  (255) for   24:12:15
+micha@LinuxBox:~/MBtools$ Smartdose Gosund03
+Using 192.168.178.52:502:1
+Gosund device| Telnet server| Modbus server| Fauxmo server (Alexa)| Timers| Default: ON
+Running since    0:40:25
+ON time          0:23:40
+ON  (255) for    0:40:25
 accumulated         0.00 kWh
 Power               0.00 W
-Voltage           230.88 V
-Current             0.02 A
+Voltage           230.72 V
+Current             0.00 A
+Timer  1: ACT  ON 18:05 SUN MON TUE WED THU FRI SAT
+Timer  2: ACT OFF 21:50 SUN MON TUE WED THU FRI SAT
+Timer  3:     OFF 00:00
+Timer  4:     OFF 00:00
+Timer  5:     OFF 00:00
+Timer  6:     OFF 00:00
+Timer  7:     OFF 23:59 SUN SAT
+Timer  8:     OFF 00:00
+Timer  9:     OFF 00:00
+Timer 10:     OFF 00:00
+Timer 11: ACT  ON 07:30 WED
+Timer 12:     OFF 00:00
+Timer 13:     OFF 00:00
+Timer 14:     OFF 00:00
+Timer 15:     OFF 00:00
+Timer 16:     OFF 00:00
 ```
 The first line gives the full descriptor the program has built from the entered target description.
 The next lists the attributes the device has set - of course the Modbus server is listed here - else nothing would be read!
 The next three lines give the switch statistics - run time since last reboot, time spent in ON state and the time the current state (``ON`` in the example) is active.
 
 Please note that with Gosund devices the last two are different, since the ``ON time`` only is counted if power consumption is measured, while the current state is counted for the time the switch being electrically ON or OFF.
-Maxcio devices have no power meter, hence will have both times identical.
+Maxcio and Sonoff devices have no power meter, hence will have both times identical.
 
-The final four lines are shown for Gosund devices only and are showing the current values of the power meter.
+The next four lines are shown for Gosund devices only and are showing the current values of the power meter.
+
+Finally the 16 timers are listed. In the example, only timers 1, 2, 7 and 11 have been programmed, timer 7 is set inactive.
 
 #### EVERY n
 EVERY is basically the same as INFO, but does repeatedly request and display the target's data.
+Timer data are not printed again.
 The ``n`` gives the number of seconds between data requests and may not be 0. 
 A value of at least 5 is sensible to not overload the devices with requests.
 
@@ -131,3 +161,64 @@ W:    1.04000
 ```
 
 These changes are permanent and will have immediate effect.
+
+#### TIMER <n>
+The ``TIMER`` command is the way to display and alter the timers' programs.
+``TIMER`` will need further sub-parameters to control its actions. The number ``n`` of the timer to be handled is mandatory in any case.
+``n`` can be in the range 1..16 only.
+
+If only a timer number is given, ``Smartdose`` will just print out the current data of that timer.
+```
+micha@LinuxBox:~/MBtools$ Smartdose Gosund03 Timer 11
+Using 192.168.178.52:502:1
+Timer 11: ACT  ON 07:30 WED
+```
+
+##### Sub-parameters
+All further parameters to ``TIMER`` are processed left to right. A parameter further to the right will overwrite a previous parameter in case both are affecting the same data.
+F.i. using ``CLEAR`` after having set days, time etc. will discard all these data!
+
+###### ON, OFF
+This parameter defines which type of switch the timer will trigger - socket to on or off.
+
+###### ACTIVE, INACTIVE
+A completely programmed timer can be deactivated. Its data is kept, but the timer will not fire until it is activated again.
+
+###### CLEAR
+To completely erase all data of a timer and deactivate it, the ``CLEAR`` sub-parameter is used.
+It may be advisable to use a ``CLEAR`` as a first sub-parameter when setting up a new timer - to get rid of potential remains of a previous programming.
+
+###### Day parameters DAILY, WORKDAYS, WEEKEND, SUNDAY, MONDAY etc.
+Timers may be restricted to certain days of week. The days may be named individually in several independent parameters, or a group word can be used.
+``DAILY`` will set all days of the week, whereas ``WEEKEND`` will set Saturday and Sunday only and ``WORKDAYS`` will set the complementary days Monday to Friday.
+Group words and single days can be combined, like ``WEEKEND WEDNESDAY FRIDAY`` if needed.
+
+###### Trigger time HH:MM
+The time to have the timer trigger a switch is given as a 24-hour hours value, a colon separator and a minute value 0..59.
+No blanks may be used in between!
+
+##### Examples
+To have your porch light switch on every day at 8pm and off again at 1:30am in the morning, you will want to program two timers:
+```
+micha@LinuxBox:~/MBtools$ Smartdose Gosund03 Timer 1 clear daily on 20:00 active
+Using 192.168.178.52:502:1
+Timer  1: ACT  ON 20:00 SUN MON TUE WED THU FRI SAT
+micha@LinuxBox:~/MBtools$ Smartdose Gosund03 Timer 2 clear daily off 1:30 active
+Using 192.168.178.52:502:1
+Timer  2: ACT OFF 01:30 SUN MON TUE WED THU FRI SAT
+```
+Note the use of ``CLEAR`` before the programming proper.
+
+During the week you may like to have your working room heated before you get there:
+```
+micha@LinuxBox:~/MBtools$ Smartdose RadiatorWRoom Timer 9 clear workdays on 7:15 active
+Using 192.168.178.96:502:1
+Timer  9: ACT  ON 07:15 MON TUE WED THU FRI
+```
+(You are supposed to switch it off when you leave...)
+But hey, we can put a safety OFF in case you forgot:
+```
+micha@LinuxBox:~/MBtools$ Smartdose RadiatorWRoom Timer 10 clear workdays off 22:00 active
+Using 192.168.178.96:502:1
+Timer 10: ACT  OFF 22:00 MON TUE WED THU FRI
+```

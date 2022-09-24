@@ -3,9 +3,11 @@
 This is a standalone firmware for the named smart plugs/sockets, supporting:
 - Philips Hue hub V1 emulation (courtesy of [github.com/vintlabs/fauxmoESP](https://github.com/vintlabs/fauxmoESP), TCP port 80) to enable Alexa speech control
 - Telnet monitor for plug operations (TCP port 23)
+- 16 programmable timer events
 - OTA flashing of new firmware
 - Modbus server (TCP port 502) for
   - run time statictics
+  - timer programming
   - power metering (Gosund SP1 only)
 
 No app, no cloud service, no data transfers outside your home network
@@ -61,6 +63,35 @@ Server IP: 192.168.178.54
 
 **Note**: the Telnet output is read-only, you may not enter any command here!
 
+#### Programmable timers 1..16
+(only available if you compiled with the ``TIMERS`` flag set to 1!)
+
+There are 16 programmable timers available, that independently can switch the socket ON or OFF, based on the day of week, hour and minute.
+Timers are controlled by their Modbus register values.
+
+| Register | MSB                                   | LSB                            | Remarks  |
+|----------|---------------------------------------|--------------------------------|----------|
+| First    | Bit | Meaning                         | Bit | Meaning                  |          |
+|          |-----|---------------------------------|--------------------------------|          |
+|          |   0 | 1=SUNDAY                        |   0 | 1=switch to ON, else OFF |          |
+|          |   1 | 1=MONDAY                        |   1 | reserved                 |          |
+|          |   2 | 1=TUESDAY                       |   2 | reserved                 |          |
+|          |   3 | 1=WEDNESDAY                     |   3 | reserved                 |          |
+|          |   4 | 1=THURSDAY                      |   4 | reserved                 |          |
+|          |   5 | 1=FRIDAY                        |   5 | reserved                 |          |
+|          |   6 | 1=SATURDAY                      |   6 | reserved                 |          |
+|          |   7 | 1=timer active, else inactive   |   7 | reserved                 |          |
+|----------|---------------------------------------|--------------------------------|----------|
+| Second   | Hour to fire the timer 0..23          | Minute to fire the timer 0..59 |          |
+|----------|---------------------------------------|--------------------------------|----------|
+
+The timers are checked every 30s only, so expect inaccuracy up to that time span.
+
+There is a Linux utility called ``Smartdose`` in the "Extras" folder of this repository.
+You may use that to remotely control all socket functions. See the ``README`` file there for detailed information.
+
+To deactivate all 16 timers you can press the socket's button and hold it down for 1s. A new activation can only be done by Modbus requests.
+
 ### Modbus register reference
 The Modbus server running on the smart plus will give out internal values as "holding registers", hence function code 0x03 READ_HOLD_REGISTER can be used to retrieve these values.
 Register addresses 1 to 8 are available on any device, regardless of type, whereas registers 9 and onward are only valid for Gosund SP1 devices.
@@ -87,10 +118,29 @@ Register addresses 1 to 8 are available on any device, regardless of type, where
 | 17, 18   | Current power consumption (W)   |                |
 | 19, 20   | Current voltage level (V)       |                |
 | 21, 22   | Current current level (A)       |                |
+|----------|---------------------------------|----------------|
+| 23, 24   | Timer 1 data (see below)        | Yes            |
+| 25, 26   | Timer 2 data                    | Yes            |
+| 27, 28   | Timer 3 data                    | Yes            |
+| 29, 30   | Timer 4 data                    | Yes            |
+| 31, 32   | Timer 5 data                    | Yes            |
+| 33, 34   | Timer 6 data                    | Yes            |
+| 35, 36   | Timer 7 data                    | Yes            |
+| 37, 38   | Timer 8 data                    | Yes            |
+| 39, 40   | Timer 9 data                    | Yes            |
+| 41, 42   | Timer 10 data                   | Yes            |
+| 43, 44   | Timer 11 data                   | Yes            |
+| 45, 46   | Timer 12 data                   | Yes            |
+| 47, 48   | Timer 13 data                   | Yes            |
+| 49, 50   | Timer 14 data                   | Yes            |
+| 51, 52   | Timer 15 data                   | Yes            |
+| 53, 54   | Timer 116 data                  | Yes            |
+|----------|---------------------------------|----------------|
 
 **Note**: all measurement values are sent as an IEEE754 float number in MSB-first byte sequence. The 4 bytes of that float will use two consecutive registers.
 
-The registers marked as write enabled can be set with the 0x06 WRITE_HOLD_REGISTER function code. 
+The registers 1, 2, 9 and 10 marked as write enabled can be set with the 0x06 WRITE_HOLD_REGISTER function code. 
+The timer registers 23..54 can only be written with function code 0x10 WRITE_MULT_REGISTERS.
 
 Since the Gosund built-in meters are somewhat inaccurate, you may modify the measured results with a constant factor at least.
 So if f.i. the voltage is off by about 3%, you can set a voltage correction factor of 1.03 to have that adjusted.
