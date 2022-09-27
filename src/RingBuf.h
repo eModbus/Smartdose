@@ -35,13 +35,13 @@ public:
 // size: required size in T elements
 // preserve: if true, no more elements will be added to a full buffer unless older elements are consumed
 //           if false, buffer will be rotated until the newest element is added
-  explicit RingBuf(size_t size = 256, bool preserve = false);
+  explicit RingBuf(size_t size = 256, bool preserve = false) noexcept;
 
   // Destructor: takes care of cleaning up the buffer
   ~RingBuf();
 
   // Copy constructor
-  RingBuf(const RingBuf &r);
+  RingBuf(const RingBuf &r) noexcept;
 
   // Move constructor
   RingBuf(RingBuf &&r);
@@ -171,7 +171,7 @@ RingBuf<T>::operator bool() {
 
 // Constructor: allocate a buffer twice the requested size
 template <typename T>
-RingBuf<T>::RingBuf(size_t size, bool p) :
+RingBuf<T>::RingBuf(size_t size, bool p) noexcept :
   RB_len(size),
   RB_usable(size),
   RB_preserve(p),
@@ -195,7 +195,7 @@ RingBuf<T>::~RingBuf() {
 
 // Copy constructor: take over everything
 template <typename T>
-RingBuf<T>::RingBuf(const RingBuf &r) {
+RingBuf<T>::RingBuf(const RingBuf &r) noexcept {
   // Is the assigned RingBuf valid?
   if (r.RB_buffer && (r.RB_buffer != RingBuf<T>::nilBuf)) {
     // Yes. Try to allocate a copy

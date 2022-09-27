@@ -11,7 +11,7 @@ Running ``Smartdose`` without parameters will give you this usage hint:
 At least one argument needed!
 
 Usage: Smartdose host[:port[:serverID]]] [cmd [cmd_parms]]
-  cmd: INFO | ON | OFF | DEFAULT | EVERY | RESET | FACTOR | TIMER
+  cmd: INFO | ON | OFF | DEFAULT | EVERY | RESET | FACTOR | EVENTS | TIMER
   DEFAULT ON|OFF
   EVERY <seconds>
   FACTOR [V|A|W [<factor>]]
@@ -161,6 +161,20 @@ W:    1.04000
 ```
 
 These changes are permanent and will have immediate effect.
+
+#### EVENTS
+If event tracking has been activated (by ``-DEVENT_TRACKING=1``), the ``EVENTS`` command will list all events recorded so far, but only up to the configured number of events back.
+The default is 40. Output is a list of events in readable form:
+```
+micha@LinuxBox:~$ Smartdose Gosund03 events
+Using 192.168.178.52:502:1
+40 event slots found.
+boot date            27.09
+boot time            16:48
+default on           16:48
+button off           16:49
+Modbus on            16:49
+```
 
 #### TIMER <n>
 The ``TIMER`` command is the way to display and alter the timers' programs.

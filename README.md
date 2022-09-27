@@ -9,6 +9,7 @@ This is a standalone firmware for the named smart plugs/sockets, supporting:
   - run time statictics
   - timer programming
   - power metering (Gosund SP1 only)
+  - event monitoring
 
 No app, no cloud service, no data transfers outside your home network
 
@@ -118,7 +119,7 @@ Register addresses 1 to 8 are available on any device, regardless of type, where
 | 19, 20   | Current voltage level (V)       |                |
 | 21, 22   | Current current level (A)       |                |
 |----------|---------------------------------|----------------|
-| 23, 24   | Timer 1 data (see below)        | Yes            |
+| 23, 24   | Timer 1 data (see above)        | Yes            |
 | 25, 26   | Timer 2 data                    | Yes            |
 | 27, 28   | Timer 3 data                    | Yes            |
 | 29, 30   | Timer 4 data                    | Yes            |
@@ -135,6 +136,8 @@ Register addresses 1 to 8 are available on any device, regardless of type, where
 | 51, 52   | Timer 15 data                   | Yes            |
 | 53, 54   | Timer 16 data                   | Yes            |
 |----------|---------------------------------|----------------|
+| 55       | Number of event slots           |                |
+| 56..     | Event slots (see below)         |                |
 
 **Note**: all measurement values are sent as an IEEE754 float number in MSB-first byte sequence. The 4 bytes of that float will use two consecutive registers.
 
@@ -150,3 +153,26 @@ You will need a good meter to measure the values at the smart plug outlet.
 The correction factors are modified as follows: 
 - use function code 0x43 USER_DEFINED_43 to send a correction factor.
   The first byte has to be one of 0=voltage, 1=current or 2=power, followed by a 4-byte IEEE754 float value with the factor.
+
+###### Event slot data
+Each 16 bit register value is split into 3 parts:
+- bits 0..5  : minutes or month, depending on event
+- bits 6..10 : hours or day of month, depending on event
+- bits 11..15 : event type
+
+The event type is one of
+```
+-  0 : NO_EVENT
+-  1 : DATE_CHANGE
+-  2 : BOOT_DATE
+-  3 : BOOT_TIME
+-  4 : DEFAULT_ON
+-  5 : BUTTON_ON
+-  6 : BUTTON_OFF
+-  7 : MODBUS_ON
+-  8 : MODBUS_OFF
+-  9 : TIMER_ON
+- 10 : TIMER_OFF
+- 11 : FAUXMO_ON
+- 12 : FAUXMO_OFF
+```

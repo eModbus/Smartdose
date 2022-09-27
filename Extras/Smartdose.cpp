@@ -54,8 +54,8 @@ struct SDtimers {
 } timerData[16];
 
 // Commands understood
-const char *cmds[] = { "INFO", "ON", "OFF", "DEFAULT", "EVERY", "RESET", "FACTOR", "TIMER", "_X_END" };
-enum CMDS : uint8_t { INFO = 0, SW_ON, SW_OFF, DEFLT, EVRY, RST_CNT, FCTR, TIMR, X_END };
+const char *cmds[] = { "INFO", "ON", "OFF", "DEFAULT", "EVERY", "RESET", "FACTOR", "TIMER", "EVENTS", "_X_END" };
+enum CMDS : uint8_t { INFO = 0, SW_ON, SW_OFF, DEFLT, EVRY, RST_CNT, FCTR, TIMR, EVNTS, X_END };
 
 void handleError(Error error, uint32_t token) 
 {
@@ -700,6 +700,72 @@ int main(int argc, char **argv) {
       if (subcmd == 99) {
         usage("TIMER requires a timer number at least!");
         return -1;
+      }
+    }
+    break;
+// --------- Read event storage -----------------
+  case EVNTS:
+    {
+//    Read number of event slots
+      uint16_t addr = 55;
+      uint16_t words = 1;
+      uint16_t offs = 3;
+      ModbusMessage response = MBclient.syncRequest(18, targetServer, READ_HOLD_REGISTER, addr, words);
+      Error err = response.getError();
+      if (err!=SUCCESS) {
+        handleError(err, 18);
+      } else {
+        uint16_t events = 0;
+        offs = response.get(offs, events);
+//      Has it some?
+        if (events) {
+//        Yes. Read them.
+          addr = 56;
+          offs = 3;
+          response = MBclient.syncRequest(19, targetServer, READ_HOLD_REGISTER, addr, events);
+          err = response.getError();
+          if (err!=SUCCESS) {
+            handleError(err, 19);
+          } else {
+            cout << events << " event slots found." << endl;
+//          We got some. Print those that have a meaning
+            uint16_t word = 0;
+            uint8_t ev = 0;
+            uint8_t hi = 0;
+            uint8_t lo = 0;
+//          Define the event types
+            enum S_EVENT : uint8_t  { 
+              NO_EVENT=0, DATE_CHANGE,
+              BOOT_DATE, BOOT_TIME, 
+              DEFAULT_ON,
+              BUTTON_ON, BUTTON_OFF,
+              MODBUS_ON, MODBUS_OFF,
+              TIMER_ON, TIMER_OFF,
+              FAUXMO_ON, FAUXMO_OFF,
+            };
+            const char *eventname[] = { 
+              "no event", "date change", "boot date", "boot time", "default on",
+              "button on", "button off", 
+              "Modbus on", "Modbus off", 
+              "timer on", "timer off", 
+              "Fauxmo on", "Fauxmo off", 
+            };
+//          Loop over result data
+            for (uint16_t i = 0; i < events; i++) {
+              offs = response.get(offs, word);
+              ev = (word >> 11) & 0x1F;
+              hi = (word >> 6) & 0x1F;
+              lo = word & 0x3F;
+              if (ev != NO_EVENT) {
+                snprintf(buf, 128, "%-20s %02d%c%02d", eventname[ev], hi, (ev == DATE_CHANGE || ev == BOOT_DATE) ? '.' : ':', lo);
+                cout << buf << endl;
+              }
+            }
+          }
+        } else {
+          cout << "Device has no events." << endl;
+          return 0;
+        }
       }
     }
     break;

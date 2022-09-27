@@ -38,8 +38,13 @@
 #endif
 
 // Disable Fauxmo for Alexa ignorance ;)
-#ifndef FAUXMO_ON
-#define FAUXMO_ON 0
+#ifndef FAUXMO_ACTIVE
+#define FAUXMO_ACTIVE 0
+#endif
+
+// Disable (debugging) event tracking
+#ifndef EVENT_TRACKING
+#define EVENT_TRACKING 0
 #endif
 
 // Enable timer functions: 1=yes, 0=no
@@ -47,7 +52,7 @@
 #define TIMERS 0
 #endif
 // Timers will need the Modbus server to work
-#if TIMERS == 1
+#if TIMERS == 1 || EVENT_TRACKING == 1
 #undef MODBUS_SERVER
 #define MODBUS_SERVER 1
 #endif
@@ -59,7 +64,7 @@
 #include <ESPAsyncTCP.h>
 #include <ESP8266WebServer.h>
 #include <ESP8266mDNS.h>
-#if FAUXMO_ON == 1
+#if FAUXMO_ACTIVE == 1
 #include "fauxmoESP.h"
 #endif
 #include <EEPROM.h>
@@ -72,6 +77,9 @@
 #endif
 #if MODBUS_SERVER == 1
 #include "ModbusServerTCPasync.h"
+#endif
+#if EVENT_TRACKING == 1
+#include "RingBuf.h"
 #endif
 
 // GPIO definitions
@@ -115,10 +123,10 @@
 
 // NTP definitions
 #ifndef MY_NTP_SERVER
-#define MY_NTP_SERVER "fritz.box"
+#define MY_NTP_SERVER "pool.ntp.org"
 #endif
 #ifndef MY_TZ
-#define MY_TZ "CET-1CEST-2,M3.5.0/2:00,M10.5.0/3:00"
+#define MY_TZ "CET"
 #endif
 
 // ================= No user definable values below this line ===================
@@ -163,6 +171,7 @@ const uint16_t O_TIMERS = 16 + 4 * PARMLEN;
 // Some forward declarations
 bool Debouncer(bool raw);
 void SetState(uint8_t device_id, const char * device_name, bool state, uint8_t value);
+void SetState_F(uint8_t device_id, const char * device_name, bool state, uint8_t value);
 void wifiSetup();
 void handleRoot();
 void handleSave();
@@ -175,12 +184,16 @@ void updateEnergy();
 unsigned long int highPulse = HIGH_PULSE;
 #endif
 
+// Number of event slots
+const uint8_t MAXEVENT(40);
+
 #if MODBUS_SERVER == 1
 // Highest addressable Modbus register
 // 8 basic data
 // 14 power measure data
 // NUM_TIMERS * 2 timer data
-const uint16_t MAXWORD(22 + NUM_TIMERS * 2);
+// MAXEVENT event slots + 1 slot count
+const uint16_t MAXWORD(22 + NUM_TIMERS * 2 + MAXEVENT + 1);
 
 ModbusMessage FC03(ModbusMessage request);
 ModbusMessage FC06(ModbusMessage request);
@@ -192,7 +205,7 @@ ModbusMessage FC10(ModbusMessage request);
 #endif
 #endif
 
-#if FAUXMO_ON == 1
+#if FAUXMO_ACTIVE == 1
 fauxmoESP fauxmo;             // create Philips Hue lookalike
 #endif
 bool Testschalter;            // Relay state
@@ -305,6 +318,67 @@ Blinker SignalLed(SIGNAL_LED, LOW);
 // Button to watch
 Buttoner button(BUTTON, LOW);
 
+#if EVENT_TRACKING == 1
+// Define the event types
+enum S_EVENT : uint8_t  { 
+  NO_EVENT=0, DATE_CHANGE,
+  BOOT_DATE, BOOT_TIME, 
+  DEFAULT_ON,
+  BUTTON_ON, BUTTON_OFF,
+  MODBUS_ON, MODBUS_OFF,
+  TIMER_ON, TIMER_OFF,
+  FAUXMO_ON, FAUXMO_OFF,
+};
+const char *eventname[] = { 
+  "no event", "date change", "boot date", "boot time", "default on",
+  "button on", "button off", 
+  "Modbus on", "Modbus off", 
+  "timer on", "timer off", 
+  "Fauxmo on", "Fauxmo off", 
+};
+
+// Allocate event buffer
+RingBuf<uint16_t> events(MAXEVENT);
+
+// registerEvent: append another event to the buffer
+void registerEvent(S_EVENT ev) {
+  // We will need date and/or time
+  time_t now = time(NULL);
+  tm tm;
+  localtime_r(&now, &tm);           // update the structure tm with the current time
+  uint16_t eventWord = NO_EVENT << 11;
+  uint8_t hi = 0;
+  uint8_t lo = 0;
+  
+ // Set the event word
+  if (ev == BOOT_DATE || ev == DATE_CHANGE) {
+    // Need the date
+    hi = tm.tm_mday & 0x1F;
+    lo = (tm.tm_mon + 1) & 0x3F;
+  } else {
+    // Need the time
+    hi = tm.tm_hour & 0x1F;
+    lo = tm.tm_min & 0x3F;
+  }
+  eventWord = ((ev & 0x1F) << 11) | (hi << 6) | lo;
+
+  // Prevent duplicates - last event must differ
+  if (events[events.size() - 1] != eventWord) {
+    // Push the word
+    events.push_back(eventWord);
+  }
+
+#if TELNET_LOG == 1
+  // Log event
+  tl.printf("Event: %-20s %02d%c%02d\n", eventname[ev], hi, (ev == BOOT_DATE || ev == DATE_CHANGE) ? '.' : ':', lo);
+#endif
+}
+
+#define EVENT(x) registerEvent(x)
+#else
+#define EVENT(x)
+#endif
+
 // -----------------------------------------------------------------------------
 // Setup WiFi in RUN mode
 // -----------------------------------------------------------------------------
@@ -342,6 +416,12 @@ void wifiSetup(const char *hostname) {
 // -----------------------------------------------------------------------------
 // Change state of device ON<-->OFF
 // -----------------------------------------------------------------------------
+// Wrapper for Fauxmo to be able to register Event
+void SetState_F(uint8_t device_id, const char * device_name, bool state, uint8_t value) {
+  SetState(device_id, device_name, state, value);
+  EVENT(state ? FAUXMO_ON : FAUXMO_OFF);
+}
+
 void SetState(uint8_t device_id, const char * device_name, bool state, uint8_t value) {
   if (state) { // ON
 #if TELNET_LOG == 1
@@ -435,7 +515,7 @@ ModbusMessage FC03(ModbusMessage request) {
         response.add((uint16_t)0);
 #endif
         break;
-      case 23 ... MAXWORD: // timer data may be not present as well
+      case 23 ... 54: // timer data may be not present as well
 #if TIMERS == 1
         {
           // Calculate timer slot
@@ -448,6 +528,20 @@ ModbusMessage FC03(ModbusMessage request) {
             response.add(timers[tim].minute);
           }
         }
+#else
+        response.add((uint16_t)0);
+#endif
+        break;
+      case 55: // Event slot count
+#if EVENT_TRACKING
+        response.add((uint16_t)MAXEVENT);
+#else
+        response.add((uint16_t)0);
+#endif
+        break;
+      case 56 ... MAXWORD: // Event slots
+#if EVENT_TRACKING
+        response.add(events[addr - 56]);
 #else
         response.add((uint16_t)0);
 #endif
@@ -485,6 +579,8 @@ ModbusMessage FC06(ModbusMessage request) {
     if (value < 256) {
       // Yes. switch socket
       SetState(0, DEVNAME, (value ? true : false), (uint8_t)value);
+      // Register event
+      EVENT(value ? MODBUS_ON : MODBUS_OFF);
       response = ECHO_RESPONSE;
     } else {
       // No, illegal data value
@@ -531,7 +627,7 @@ ModbusMessage FC10(ModbusMessage request) {
   offs = request.get(offs, words); // read register count
 
   // Address and range valid?
-  if (addr >= 23 && (addr + words) <= MAXWORD && words) {
+  if (addr >= 23 && (addr + words) <= 54 && words) {
     // Seems to be okay
     offs++;               // Skip length byte
     Timer_t tim_temp;     // Temporary storage to check data
@@ -760,20 +856,20 @@ void setup() {
 #if MODBUS_SERVER == 1
     showFlags |= CONF_HAS_MODBUS;
 #endif
-#if FAUXMO_ON == 1
+#if FAUXMO_ACTIVE == 1
     showFlags |= CONF_HAS_FAUXMO;
 #endif
 #if TIMERS == 1
     showFlags |= CONF_TIMERS;
 #endif
 
-#if FAUXMO_ON == 1
+#if FAUXMO_ACTIVE == 1
     // Fauxmo setup.
     fauxmo.createServer(true);        // Start server
     fauxmo.setPort(80);               // use HTML port 80
     fauxmo.enable(true);              // get visible.
     fauxmo.addDevice(DEVNAME);        // Set Hue name
-    fauxmo.onSetState(SetState);      // link to switch callback
+    fauxmo.onSetState(SetState_F);    // link to switch callback
     fauxmo.setState(DEVNAME, false, (uint8_t)255);      // set OFF state
 #endif
 
@@ -829,10 +925,15 @@ void setup() {
   tl.begin(buffer);
 #endif
 
+  EVENT(BOOT_DATE);
+  EVENT(BOOT_TIME);
+
   // Default ON?
   if (configFlags & 0x0001) {
     SetState(0, DEVNAME, true, 255);
+    EVENT(DEFAULT_ON);
   }
+
 }
 
 #if DEVICETYPE == GOSUND_SP1
@@ -908,7 +1009,7 @@ void loop() {
 
   // RUN mode?
   if (mode == RUN) {
-#if FAUXMO_ON == 1
+#if FAUXMO_ACTIVE == 1
     // YES. Check Hue requests.
     fauxmo.handle();
 #endif
@@ -920,6 +1021,7 @@ void loop() {
     // If button clicked, toggle Relay/LED
     if (be == BE_CLICK) {
       SetState(0, DEVNAME, !Testschalter, 255);
+      EVENT(Testschalter ? BUTTON_ON : BUTTON_OFF);
 #if TIMERS == 1
     // if held down, disarm all timers
     } else if (be == BE_PRESS) {
@@ -1003,7 +1105,6 @@ void loop() {
 #endif
     }
 
-#if TIMERS == 1
     // Is it time to check the timers?
     if ((millis() - lastTimerCheck) > TIMER_UPDATE_INTERVAL) {
       // Yes. Get day of week, hour and minute for comparisons
@@ -1012,6 +1113,8 @@ void loop() {
       uint8_t cHour = tmData->tm_hour;          // 0..23
       uint8_t cMinute = tmData->tm_min;         // 0..59
       uint8_t cWday = 1 << tmData->tm_wday;     // 0=Sunday
+
+#if TIMERS == 1
       // Get switch state for comparisons
       uint8_t cOnOff = Testschalter ? ONMASK : 0;
       
@@ -1027,6 +1130,7 @@ void loop() {
             if (timers[i].onOff != cOnOff) {
               // No, we need to switch it
               SetState(0, DEVNAME, !Testschalter, 255);
+              EVENT(Testschalter ? TIMER_ON : TIMER_OFF);
 #if TELNET_LOG == 1
               tl.printf("Timer %d fired (%s %02X %02d:%02d)\n", 
                 i + 1,
@@ -1041,9 +1145,17 @@ void loop() {
           }
         }
       }
+#endif
+
+#if EVENT_TRACKING == 1
+      // Are we passing midnight?
+      if (cHour == 0 && cMinute == 0) {
+        // Yes. Register event
+        EVENT(DATE_CHANGE);
+      }
+#endif
       lastTimerCheck = millis();
     }
-#endif
 
   // No, config mode. Keep the web server active
   } else {
