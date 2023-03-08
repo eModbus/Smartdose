@@ -1,4 +1,4 @@
-// Firmware for "Gosund SP1", "Maxcio W-DE 004" and "Sonoff S26"-type smart sockets.
+// Firmware for "Gosund SP1", "Maxcio W-DE 004", "Nous A1T" and "Sonoff S26"-type smart sockets.
 // Copyright 2020-2022 by miq1@gmx.de
 //
 // Features:
@@ -22,7 +22,9 @@
 #define GOSUND_SP1 1
 #define MAXCIO 2
 #define SONOFF_S26 3
+#define NOUS_A1T 4
 // Set the device to be used
+// Default is a Maxcio device with minimum functionality
 #ifndef DEVICETYPE
 #define DEVICETYPE MAXCIO
 #endif
@@ -90,13 +92,12 @@
 #define BUTTON 3
 #define SIGNAL_LED RED_LED
 #define POWER_LED BLUE_LED
-
 // Energy monitor GPIOs
 #define SEL_PIN 12
 #define CF_PIN 4
 #define CF1_PIN 5 
-
 // Energy monitor settings
+#define HASPOWERMETER 1
 #define HIGH_PULSE 38
 #endif
 #if DEVICETYPE == MAXCIO
@@ -114,12 +115,31 @@
 #define BUTTON 0
 #define SIGNAL_LED LED
 #endif
+#if DEVICETYPE == NOUS_A1T
+#define LED 13
+#define RELAY 14
+#define BUTTON 0
+#define SIGNAL_LED LED
+#define POWER_LED LED
+// Energy monitor GPIOs
+#define SEL_PIN 12
+#define CF_PIN 4
+#define CF1_PIN 5 
+// Energy monitor settings
+#define HASPOWERMETER 1
+#define HIGH_PULSE 38
+#endif
+
+// Disable power meter functions if not explicitly set before
+#ifndef HASPOWERMETER
+#define HASPOWERMETER 0
+#endif
 
 // Time between (energy) monitor updates in ms
 #define UPDATE_TIME 5000
 
 // Time between timer checks - must be below 1 minute to not let pass a timer unnoticed!
-#define TIMER_UPDATE_INTERVAL 30000
+#define TIMER_UPDATE_INTERVAL 40000
 
 // NTP definitions
 #ifndef MY_NTP_SERVER
@@ -141,7 +161,7 @@
 // Config flags
 #define CONF_DEFAULT_ON 0x0001
 #define CONF_MASK       0x0001
-#define CONF_IS_GOSUND  0x8000
+#define CONF_HAS_POWER  0x8000
 #define CONF_HAS_TELNET 0x4000
 #define CONF_HAS_MODBUS 0x2000
 #define CONF_HAS_FAUXMO 0x1000
@@ -160,7 +180,7 @@
 
 #if TIMERS == 1
 // EEPROM offsets etc. for timer data
-const uint16_t O_TIMERS = 16 + 4 * PARMLEN;
+constexpr uint16_t O_TIMERS = 16 + 4 * PARMLEN;
 #define ACTIVEMASK 0x80
 #define DAYMASK    0x7F
 #define ONMASK     0x01
@@ -168,17 +188,42 @@ const uint16_t O_TIMERS = 16 + 4 * PARMLEN;
 // Number of timers is needed in any case (memory layout)
 #define NUM_TIMERS 16
 
+// Struct for timers
+struct Timer_t {
+  uint8_t activeDays;         // Bit 0..6: days of week, bit 7: active/inactive flag
+  uint8_t onOff;              // Bit 0: 1=timer switches on, 0=switches off
+  uint8_t hour;               // HH24 hour of switching time
+  uint8_t minute;             // MM minutes of switching time
+  Timer_t() :
+    activeDays(0),
+    onOff(0),
+    hour(0),
+    minute(0) { }
+};
+
+#if HASPOWERMETER == 1
+// EEPROM offset to auto power off data
+constexpr uint16_t O_AUTO_PO = 16 + 4 * PARMLEN + NUM_TIMERS * sizeof(Timer_t);
+// Auto off control values
+uint16_t aoAmps = 0;                 // LOW current definition value in mA
+uint16_t aoCycles = 0;               // Number of LOW measurements required to trigger auto off
+uint16_t aoCount = 0;            // Variable to track the number of matching measurements
+#endif
+
+// WiFi reconnect definitions
+WiFiEventHandler wifiDisconnectHandler;
+
 // Some forward declarations
 bool Debouncer(bool raw);
 void SetState(uint8_t device_id, const char * device_name, bool state, uint8_t value);
 void SetState_F(uint8_t device_id, const char * device_name, bool state, uint8_t value);
-void wifiSetup();
+void wifiSetup(const char *hostname);
 void handleRoot();
 void handleSave();
 void handleRestart();
 void handleNotFound();
 
-#if DEVICETYPE == GOSUND_SP1
+#if HASPOWERMETER == 1
 unsigned long int getFrequency();
 void updateEnergy();
 unsigned long int highPulse = HIGH_PULSE;
@@ -193,11 +238,12 @@ const uint8_t MAXEVENT(40);
 // 14 power measure data
 // NUM_TIMERS * 2 timer data
 // MAXEVENT event slots + 1 slot count
-const uint16_t MAXWORD(22 + NUM_TIMERS * 2 + MAXEVENT + 1);
+// 2 auto power off control values
+constexpr uint16_t MAXWORD(22 + NUM_TIMERS * 2 + MAXEVENT + 1 + 2);
 
 ModbusMessage FC03(ModbusMessage request);
 ModbusMessage FC06(ModbusMessage request);
-#if DEVICETYPE == GOSUND_SP1
+#if HASPOWERMETER == 1
 ModbusMessage FC43(ModbusMessage request);
 #endif
 #if TIMERS == 1
@@ -230,7 +276,7 @@ struct Measure {
 #define POWER   2
 Measure measures[3];
 
-#if DEVICETYPE == GOSUND_SP1
+#if HASPOWERMETER == 1
 // Spent Watt hours (Wh) since system boot
 double accumulatedWatts = 0.0;
 // Counters and interrupt functions to sample meter frequency
@@ -240,18 +286,6 @@ volatile unsigned long int CF_tick = 0;
 void IRAM_ATTR CF_Tick() { CF_tick++; }
 #endif
 
-// Same for timers
-struct Timer_t {
-  uint8_t activeDays;         // Bit 0..6: days of week, bit 7: active/inactive flag
-  uint8_t onOff;              // Bit 0: 1=timer switches on, 0=switches off
-  uint8_t hour;               // HH24 hour of switching time
-  uint8_t minute;             // MM minutes of switching time
-  Timer_t() :
-    activeDays(0),
-    onOff(0),
-    hour(0),
-    minute(0) { }
-};
 Timer_t timers[NUM_TIMERS];
 
 
@@ -328,6 +362,8 @@ enum S_EVENT : uint8_t  {
   MODBUS_ON, MODBUS_OFF,
   TIMER_ON, TIMER_OFF,
   FAUXMO_ON, FAUXMO_OFF,
+  WIFI_DISCONN, WIFI_CONN, WIFI_LOST,
+  AUTOOFF,
 };
 const char *eventname[] = { 
   "no event", "date change", "boot date", "boot time", "default on",
@@ -335,6 +371,8 @@ const char *eventname[] = {
   "Modbus on", "Modbus off", 
   "timer on", "timer off", 
   "Fauxmo on", "Fauxmo off", 
+  "WiFi disconn", "WiFi connected", "WiFi lost",
+  "Low power auto off",
 };
 
 // Allocate event buffer
@@ -380,6 +418,15 @@ void registerEvent(S_EVENT ev) {
 #endif
 
 // -----------------------------------------------------------------------------
+// WiFi disconnect handler
+// -----------------------------------------------------------------------------
+void onWifiDisconnect(const WiFiEventStationModeDisconnected& event) {
+  registerEvent(WIFI_DISCONN);
+  WiFi.disconnect();
+  wifiSetup(DEVNAME);
+}
+
+// -----------------------------------------------------------------------------
 // Setup WiFi in RUN mode
 // -----------------------------------------------------------------------------
 void wifiSetup(const char *hostname) {
@@ -399,8 +446,9 @@ void wifiSetup(const char *hostname) {
   // Wait for connection. ==> We will hang here in RUN mode forever without a WiFi!
   while (WiFi.status() != WL_CONNECTED) {
     SignalLed.update();
-    delay(50);
+    delay(250);
   }
+  wifiDisconnectHandler = WiFi.onStationModeDisconnected(onWifiDisconnect);
 
   myIP = WiFi.localIP();
   
@@ -408,6 +456,8 @@ void wifiSetup(const char *hostname) {
   if (*hostname) {
     MDNS.begin(hostname);
   }
+
+  registerEvent(WIFI_CONN);
 
   // Connected! Stop blinking
   SignalLed.stop();
@@ -466,8 +516,8 @@ ModbusMessage FC03(ModbusMessage request) {
     // set up response
     response.add(request.getServerID(), request.getFunctionCode(), (uint8_t)(words * 2));
 
-#if DEVICETYPE == GOSUND_SP1
-    // On Gosund devices we need to set up the float array
+#if HASPOWERMETER == 1
+    // On devices w/ power meter we need to set up the float array
     ModbusMessage memory;
     memory.add((float)accumulatedWatts);
     memory.add(measures[VOLTAGE].factor);
@@ -508,14 +558,14 @@ ModbusMessage FC03(ModbusMessage request) {
         response.add(onTime.getMinute());
         response.add(onTime.getSecond());
         break;
-      case 9 ... 22: // power meter data not present on non-Gosund devices
-#if DEVICETYPE == GOSUND_SP1
+      case 9 ... 22: // power meter data not present on other devices
+#if HASPOWERMETER == 1
         response.add(memory.data() + (addr - 9) * 2, 2);
 #else
         response.add((uint16_t)0);
 #endif
         break;
-      case 23 ... 54: // timer data may be not present as well
+      case 23 ... 23 + NUM_TIMERS * 2 - 1: // timer data may be not present as well
 #if TIMERS == 1
         {
           // Calculate timer slot
@@ -532,16 +582,30 @@ ModbusMessage FC03(ModbusMessage request) {
         response.add((uint16_t)0);
 #endif
         break;
-      case 55: // Event slot count
+      case 23 + NUM_TIMERS * 2: // Event slot count
 #if EVENT_TRACKING
         response.add((uint16_t)MAXEVENT);
 #else
         response.add((uint16_t)0);
 #endif
         break;
-      case 56 ... MAXWORD: // Event slots
+      case 23 + NUM_TIMERS * 2 + 1 ... MAXWORD - 2: // Event slots
 #if EVENT_TRACKING
-        response.add(events[addr - 56]);
+        response.add(events[addr - (23 + NUM_TIMERS * 2 + 1)]);
+#else
+        response.add((uint16_t)0);
+#endif
+        break;
+      case MAXWORD - 1: // Auto off mA value
+#if HASPOWERMETER == 1
+        response.add(aoAmps);
+#else
+        response.add((uint16_t)0);
+#endif
+        break;
+      case MAXWORD: // Auto off cycles
+#if HASPOWERMETER == 1
+        response.add(aoCycles);
 #else
         response.add((uint16_t)0);
 #endif
@@ -593,8 +657,8 @@ ModbusMessage FC06(ModbusMessage request) {
     EEPROM.put(2, value & CONF_MASK);
     EEPROM.commit();
     response = ECHO_RESPONSE;
-#if DEVICETYPE == GOSUND_SP1
-  // On the GOSUND_SP1 we may reset the accumulated power consumption on word 9
+#if HASPOWERMETER == 1
+  // On the devices with power meter we may reset the accumulated power consumption on word 9
   } else if (address == 9) {
     // Value is zero?
     if (value == 0) {
@@ -605,6 +669,18 @@ ModbusMessage FC06(ModbusMessage request) {
       // No, illegal data value
       response.setError(request.getServerID(), request.getFunctionCode(), ILLEGAL_DATA_VALUE);
     }
+  // Auto power off LOW current value in mA
+  } else if (address == MAXWORD - 1) {
+    aoAmps = value;
+    EEPROM.put(O_AUTO_PO, aoAmps);
+    EEPROM.commit();
+    response = ECHO_RESPONSE;
+  // Auto power off LOW cycles
+  } else if (address == MAXWORD) {
+    aoCycles = value;
+    EEPROM.put(O_AUTO_PO + 2, aoCycles);
+    EEPROM.commit();
+    response = ECHO_RESPONSE;
 #endif
   } else {
     // No, memory violation. Return error
@@ -661,7 +737,7 @@ ModbusMessage FC10(ModbusMessage request) {
 }
 #endif
 
-#if DEVICETYPE == GOSUND_SP1
+#if HASPOWERMETER == 1
 // -----------------------------------------------------------------------------
 // FC43. Power meter adjustment
 // -----------------------------------------------------------------------------
@@ -723,14 +799,16 @@ void setup() {
   // EEPROM layout:
   //   0 : uint16_t magic value
   //   2 : uint16_t flag word
-  //   4 : float32 Volts adjustment factor (Gosund SP1)
-  //   8 : float32 Amperes adjustment factor (Gosund SP1)
-  //  12 : float32 Watts adjustment factor (Gosund SP1)
+  //   4 : float32 Volts adjustment factor (HASPOWERMETER==1)
+  //   8 : float32 Amperes adjustment factor (HASPOWERMETER==1)
+  //  12 : float32 Watts adjustment factor (HASPOWERMETER==1)
   //  16 : char[PARMLEN] SSID
   //  16 + PARMLEN : char[PARMLEN] PASS
   //  16 + 2 * PARMLEN : char[PARMLEN] DEVICENAME
   //  16 + 3 * PARMLEN : char[PARMLEN] OTA_PWD
-  //  16 + 4 * PARMLEN : Timer_t[NUM_TIMERS]
+  //  16 + 4 * PARMLEN : Timer_t[NUM_TIMERS] (==O_TIMERS)
+  //  16 + 4 * PARMLEN + NUM_TIMERS * sizeof(Timer_t) : uint16_t auto power off value (mA) (== O_AUTO_PO)
+  //  16 + 4 * PARMLEN + NUM_TIMERS * sizeof(Timer_t) + 2 : uint16_t auto power off check cycles
   EEPROM.begin(512);
 
   // Read magic value
@@ -779,6 +857,11 @@ void setup() {
       timers[i].hour       = EEPROM[O_TIMERS + i * sizeof(Timer_t) + 2];
       timers[i].minute     = EEPROM[O_TIMERS + i * sizeof(Timer_t) + 3];
     }
+#endif
+#if HASPOWERMETER == 1
+    // Get auto power off values
+    EEPROM.get(O_AUTO_PO, aoAmps);
+    EEPROM.get(O_AUTO_PO + 2, aoCycles);
 #endif
   }
 
@@ -847,8 +930,8 @@ void setup() {
 
     // Set flags register
     showFlags = configFlags & CONF_MASK;
-#if DEVICETYPE == GOSUND_SP1
-    showFlags |= CONF_IS_GOSUND;
+#if HASPOWERMETER == 1
+    showFlags |= CONF_HAS_POWER;
 #endif
 #if TELNET_LOG == 1
     showFlags |= CONF_HAS_TELNET;
@@ -878,7 +961,7 @@ void setup() {
     ArduinoOTA.setPassword((const char *)O_PWD);  // Set OTA password
     ArduinoOTA.begin();               // start OTA scan
 
-#if DEVICETYPE == GOSUND_SP1
+#if HASPOWERMETER == 1
     // Configure energy meter GPIOs
     pinMode(CF_PIN, INPUT_PULLUP);
     pinMode(CF1_PIN, INPUT_PULLUP);
@@ -896,7 +979,7 @@ void setup() {
     // Register server functions to read and write data
     MBserver.registerWorker(1, READ_HOLD_REGISTER, &FC03);
     MBserver.registerWorker(1, WRITE_HOLD_REGISTER, &FC06);
-#if DEVICETYPE == GOSUND_SP1
+#if HASPOWERMETER == 1
     MBserver.registerWorker(1, USER_DEFINED_43, &FC43);
 #endif
 #if TIMERS == 1
@@ -913,7 +996,7 @@ void setup() {
   }
 #if TELNET_LOG == 1
   // Init telnet server
-  MBUlogLvl = LOG_LEVEL_ERROR;
+  MBUlogLvl = LOG_LEVEL_INFO;
   LOGDEVICE = &tl;
   char buffer[64];
 
@@ -936,7 +1019,7 @@ void setup() {
 
 }
 
-#if DEVICETYPE == GOSUND_SP1
+#if HASPOWERMETER == 1
 // getFrequency: blocking function to sample power meter data
 void getFrequency(unsigned long int& cf, unsigned long int& cf1) {
   // Disable interrupts
@@ -1041,14 +1124,40 @@ void loop() {
         }
       }
 #endif
-#if DEVICETYPE == GOSUND_SP1
+#if HASPOWERMETER == 1
       unsigned long int calcLast = millis() - last;
 #endif
       last = millis();
-#if DEVICETYPE == GOSUND_SP1
+#if HASPOWERMETER == 1
       // Read energy meter.
       updateEnergy();
       accumulatedWatts += measures[POWER].measured * calcLast / 3600000.0;
+      // Check for auto power off condition
+      // Is it activated at all?
+      if (Testschalter && aoAmps && aoCycles) {
+        // Yes. Is the current below the threshold?
+        if (measures[CURRENT].measured < (aoAmps / 1000.0)) {
+          // Yes. Did we reach the necessary cycle count?
+          if (aoCount >= aoCycles) {
+            // Yes. Switch off
+            SetState(0, DEVNAME, !Testschalter, 255);
+            registerEvent(AUTOOFF);
+            aoCount = 0;
+          } else {
+            // No, count up while we are below aoCycles (else we may overflow)
+            if (aoCount < aoCycles) {
+              aoCount++;
+            }
+            LOG_V("aoCOunt: %u, aoCycles: %u, aoAmps: %u\n", aoCount, aoCycles, aoAmps);
+          }
+        } else {
+          // No. We may init the cycle count again.
+          aoCount = 0;
+        }
+      } else {
+        // always init auto power cycle - else it may be continued after manual/Modbus switch ON
+        aoCount = 0;
+      }
 #endif
       // Count up timers
       upTime.count();
@@ -1056,7 +1165,7 @@ void loop() {
       // onTime only counted for switch state == ON
       // GOSUND_SP1 devices additionally will watch current to state ON
       if (Testschalter) { 
-#if DEVICETYPE == GOSUND_SP1
+#if HASPOWERMETER == 1
         if (measures[CURRENT].measured > 0.0)
 #endif
         onTime.count(); 
@@ -1065,12 +1174,8 @@ void loop() {
       // Check WiFi connection
       if (WiFi.status() != WL_CONNECTED) {
         // No connection - reconnect
-        WiFi.disconnect();
-        WiFi.persistent(false);
-        WiFi.mode(WIFI_OFF);
-        WiFi.mode(WIFI_STA);
-        WiFi.begin(C_SSID, C_PWD);
-        delay(100);
+        registerEvent(WIFI_LOST);
+        wifiSetup(DEVNAME);
       }
 
 #if TELNET_LOG == 1
@@ -1094,7 +1199,7 @@ void loop() {
           onTime.getHour(),
           onTime.getMinute(),
           onTime.getSecond());
-#if DEVICETYPE == GOSUND_SP1
+#if HASPOWERMETER == 1
         tl.printf("   | %6.2f V| %8.2f W| %5.2f A| %8.2f Wh|\n", 
           measures[VOLTAGE].measured, 
           measures[POWER].measured, 

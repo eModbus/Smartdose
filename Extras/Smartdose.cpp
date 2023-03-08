@@ -34,7 +34,7 @@ struct SDbasic {
   } ontime;
 } basicData;
 
-// Data structure for additional data on Gosund devices
+// Data structure for additional data on devices with power meter
 struct SDadvanced {
   float accW;
   float factorV;
@@ -43,6 +43,8 @@ struct SDadvanced {
   float watts;
   float volts;
   float amps;
+  uint16_t aoAmps;
+  uint16_t aoCycles;
 } advancedData;
 
 // Data structure for timers
@@ -54,8 +56,9 @@ struct SDtimers {
 } timerData[16];
 
 // Commands understood
-const char *cmds[] = { "INFO", "ON", "OFF", "DEFAULT", "EVERY", "RESET", "FACTOR", "TIMER", "EVENTS", "_X_END" };
-enum CMDS : uint8_t { INFO = 0, SW_ON, SW_OFF, DEFLT, EVRY, RST_CNT, FCTR, TIMR, EVNTS, X_END };
+const char *cmds[] = { "INFO", "ON", "OFF", "DEFAULT", "EVERY", "RESET", 
+  "ADJUST", "TIMER", "EVENTS", "AUTOOFF", "_X_END" };
+enum CMDS : uint8_t { INFO = 0, SW_ON, SW_OFF, DEFLT, EVRY, RST_CNT, FCTR, TIMR, EVNTS, ATOF, X_END };
 
 void handleError(Error error, uint32_t token) 
 {
@@ -75,7 +78,8 @@ void usage(const char *msg) {
   cout << endl;
   cout << "  DEFAULT ON|OFF" << endl;
   cout << "  EVERY <seconds>" << endl;
-  cout << "  FACTOR [V|A|W [<factor>]]" << endl;
+  cout << "  ADJUST [V|A|W [<measured value>]]" << endl;
+  cout << "  AUTOOFF <milliamps> <cycles>" << endl;
   cout << "  TIMER <n> [<arg> [<arg> [...]]]" << endl;
   cout << "    n: 1..16" << endl;
   cout << "    arg: ACTIVE|INACTIVE|ON|OFF|DAILY|WORKDAYS|WEEKEND|<day>|<hh24>:<mm>|CLEAR" << endl;
@@ -204,7 +208,7 @@ int main(int argc, char **argv) {
 
           // Print out results
           if (loopCnt == 0) {
-            if (basicData.flags & 0x8000) cout << "Gosund device| ";
+            if (basicData.flags & 0x8000) cout << "Power meter| ";
             if (basicData.flags & 0x4000) cout << "Telnet server| ";
             if (basicData.flags & 0x2000) cout << "Modbus server| ";
             if (basicData.flags & 0x1000) cout << "Fauxmo server (Alexa)| ";
@@ -268,23 +272,50 @@ int main(int argc, char **argv) {
             offs = response.get(offs, advancedData.volts);
             offs = response.get(offs, advancedData.amps);
             offs = response.get(offs, advancedData.watts);
-
-            if (loopCnt == 0) {
-              snprintf(buf, 128, "accumulated   %10.2f kWh", advancedData.accW / 1000.0);
-              cout << buf << endl;
-              snprintf(buf, 128, "Power         %10.2f W", advancedData.watts);
-              cout << buf << endl;
-              snprintf(buf, 128, "Voltage       %10.2f V", advancedData.volts);
-              cout << buf << endl;
-              snprintf(buf, 128, "Current       %10.2f A", advancedData.amps);
+//          Read number of event slots - auto power off values are behind
+            uint16_t addr = 55;
+            uint16_t words = 1;
+            uint16_t offs = 3;
+            response = MBclient.syncRequest(20, targetServer, READ_HOLD_REGISTER, addr, words);
+            err = response.getError();
+            if (err!=SUCCESS) {
+              handleError(err, 20);
             } else {
-              snprintf(buf, 128, "%10.2f  %10.2f  %10.2f  %10.2f",
-                advancedData.accW / 1000.0,
-                advancedData.watts,
-                advancedData.volts,
-                advancedData.amps);
+              // Add event registers to addr to get to the auto off data
+              uint16_t events = 0;
+              offs = response.get(offs, events);
+              addr += events + 1;
+              words = 2;
+              offs = 3;
+              response = MBclient.syncRequest(21, targetServer, READ_HOLD_REGISTER, addr, words);
+              err = response.getError();
+              if (err!=SUCCESS) {
+                handleError(err, 21);
+              } else {
+                // now read auto power off values
+                offs = response.get(offs, advancedData.aoAmps, advancedData.aoCycles);
+
+
+                if (loopCnt == 0) {
+                  snprintf(buf, 128, "accumulated   %10.2f kWh", advancedData.accW / 1000.0);
+                  cout << buf << endl;
+                  snprintf(buf, 128, "Power         %10.2f W", advancedData.watts);
+                  cout << buf << endl;
+                  snprintf(buf, 128, "Voltage       %10.2f V", advancedData.volts);
+                  cout << buf << endl;
+                  snprintf(buf, 128, "Current       %10.2f A", advancedData.amps);
+                  cout << buf << endl;
+                  snprintf(buf, 128, "Auto power OFF %5.2f A for %u turns", advancedData.aoAmps/1000.0, advancedData.aoCycles);
+                } else {
+                  snprintf(buf, 128, "%10.2f  %10.2f  %10.2f  %10.2f",
+                    advancedData.accW / 1000.0,
+                    advancedData.watts,
+                    advancedData.volts,
+                    advancedData.amps);
+                }
+                cout << buf << endl;
+              }
             }
-            cout << buf << endl;
           }
         }
         if (basicData.flags & 0x0800) {
@@ -414,7 +445,7 @@ int main(int argc, char **argv) {
       } else {
         offs = response.get(offs, basicData.flags);
         if (!(basicData.flags & 0x8000)) {
-          usage("RESET is only for Gosund devices!");
+          usage("RESET is only for power meter devices!");
           return -1;
         }
 
@@ -443,38 +474,38 @@ int main(int argc, char **argv) {
       } else {
         offs = response.get(offs, basicData.flags);
         if (!(basicData.flags & 0x8000)) {
-          usage("FACTOR is only for Gosund devices!");
+          usage("ADJUST is only for power meter devices!");
           return -1;
+        }
+
+        addr = 9; 
+        words = 14;
+        offs = 3;
+        response = MBclient.syncRequest(11, targetServer, READ_HOLD_REGISTER, addr, words);
+        err = response.getError();
+        if (err!=SUCCESS) {
+          handleError(err, 11);
+        } else {
+          offs = response.get(offs, advancedData.accW);
+          offs = response.get(offs, advancedData.factorV);
+          offs = response.get(offs, advancedData.factorA);
+          offs = response.get(offs, advancedData.factorW);
+          offs = response.get(offs, advancedData.volts);
+          offs = response.get(offs, advancedData.amps);
+          offs = response.get(offs, advancedData.watts);
         }
 
         // Output only
         if (argc < 4) {
-          addr = 9; 
-          words = 14;
-          offs = 3;
-          response = MBclient.syncRequest(11, targetServer, READ_HOLD_REGISTER, addr, words);
-          err = response.getError();
-          if (err!=SUCCESS) {
-            handleError(err, 11);
-          } else {
-            offs = response.get(offs, advancedData.accW);
-            offs = response.get(offs, advancedData.factorV);
-            offs = response.get(offs, advancedData.factorA);
-            offs = response.get(offs, advancedData.factorW);
-            offs = response.get(offs, advancedData.volts);
-            offs = response.get(offs, advancedData.amps);
-            offs = response.get(offs, advancedData.watts);
-
-            cout << "Correction factors:" << endl;
-            snprintf(buf, 128, "V: %10.5f", advancedData.factorV);
-            cout << buf << endl;
-            snprintf(buf, 128, "A: %10.5f", advancedData.factorA);
-            cout << buf << endl;
-            snprintf(buf, 128, "W: %10.5f", advancedData.factorW);
-            cout << buf << endl;
+          cout << "Correction factors:" << endl;
+          snprintf(buf, 128, "V: %10.5f", advancedData.factorV);
+          cout << buf << endl;
+          snprintf(buf, 128, "A: %10.5f", advancedData.factorA);
+          cout << buf << endl;
+          snprintf(buf, 128, "W: %10.5f", advancedData.factorW);
+          cout << buf << endl;
             
-            return 0;
-          }
+          return 0;
         } else {
           uint8_t type = 99;
           switch (*argv[3]) {
@@ -489,13 +520,25 @@ int main(int argc, char **argv) {
             break;
           }
           if (type == 99) {
-            usage("FACTOR needs a unit (V/A/W)!");
+            usage("ADJUST needs a unit (V/A/W)!");
             return -1;
           }
 
+          // Default is reset factor to 1.0
           float f = 1.0;
           if (argc > 4) {
             f = atof(argv[4]);
+            switch (type) {
+            case 0: // V
+              f /= (advancedData.volts / advancedData.factorV);
+              break;
+            case 1: // A
+              f /= (advancedData.amps / advancedData.factorA);
+              break;
+            case 2: // W
+              f /= (advancedData.watts / advancedData.factorW);
+              break;
+            }
           }
 
           ModbusMessage facMsg(targetServer, USER_DEFINED_43);
@@ -742,6 +785,9 @@ int main(int argc, char **argv) {
               MODBUS_ON, MODBUS_OFF,
               TIMER_ON, TIMER_OFF,
               FAUXMO_ON, FAUXMO_OFF,
+              WIFI_DISCONN, WIFI_CONN, WIFI_LOST,
+              AUTOOFF,
+              UNKNOWN
             };
             const char *eventname[] = { 
               "no event", "date change", "boot date", "boot time", "default on",
@@ -749,6 +795,9 @@ int main(int argc, char **argv) {
               "Modbus on", "Modbus off", 
               "timer on", "timer off", 
               "Fauxmo on", "Fauxmo off", 
+              "WiFi disconnected", "WiFi connected", "WiFi lost",
+              "Low power off",
+              "Unknown event"
             };
 //          Loop over result data
             for (uint16_t i = 0; i < events; i++) {
@@ -757,7 +806,11 @@ int main(int argc, char **argv) {
               hi = (word >> 6) & 0x1F;
               lo = word & 0x3F;
               if (ev != NO_EVENT) {
-                snprintf(buf, 128, "%-20s %02d%c%02d", eventname[ev], hi, (ev == DATE_CHANGE || ev == BOOT_DATE) ? '.' : ':', lo);
+                if (ev == DATE_CHANGE || ev == BOOT_DATE) {
+                  snprintf(buf, 128, "%2d %-15s %02d.%02d.", ev, eventname[ev], hi, lo);
+                } else {
+                  snprintf(buf, 128, "%2d %-20s %02d:%02d", ev, eventname[ev >= (uint8_t)UNKNOWN ? (uint8_t)UNKNOWN : ev], hi, lo);  // nolint
+                }
                 cout << buf << endl;
               }
             }
@@ -766,6 +819,53 @@ int main(int argc, char **argv) {
           cout << "Device has no events." << endl;
           return 0;
         }
+      }
+    }
+    break;
+// --------- Auto power off settings -----------------
+  case ATOF:
+    {
+      // Check arguments
+      int mA = 0;
+      int cyc = 0;
+      if (argc == 5) {
+//      Get milliamps and cycle count. Any value 0..65535 is valid
+        mA = atoi(argv[3]);
+        cyc = atoi(argv[4]);
+        if (mA >= 0 && mA <= 65535 && cyc >= 0 && cyc <= 65535) {
+//        Read number of event slots - auto power off values are behind
+          uint16_t addr = 55;
+          uint16_t words = 1;
+          uint16_t offs = 3;
+          ModbusMessage response = MBclient.syncRequest(22, targetServer, READ_HOLD_REGISTER, addr, words);
+          Error err = response.getError();
+          if (err!=SUCCESS) {
+            handleError(err, 22);
+          } else {
+            uint16_t evOffs = 0;
+            response.get(offs, evOffs);
+            addr += evOffs + 1;
+            // All fine. Write data in two requests
+            response = MBclient.syncRequest(23, targetServer, WRITE_HOLD_REGISTER, addr, (uint16_t)mA);
+            err = response.getError();
+            if (err!=SUCCESS) {
+              handleError(err, 23);
+            } else {
+              addr++;
+              response = MBclient.syncRequest(24, targetServer, WRITE_HOLD_REGISTER, addr, (uint16_t)cyc);
+              err = response.getError();
+              if (err!=SUCCESS) {
+                handleError(err, 24);
+              } 
+            }
+          }
+        } else {
+          usage("AUTOOFF: <milliamps>/<cycles> must be 0..65535!");
+          return -2;
+        }
+      } else {
+        usage("AUTOOFF needs <milliamps> and <cycles>!");
+        return -2;
       }
     }
     break;

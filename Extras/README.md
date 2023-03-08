@@ -11,10 +11,11 @@ Running ``Smartdose`` without parameters will give you this usage hint:
 At least one argument needed!
 
 Usage: Smartdose host[:port[:serverID]]] [cmd [cmd_parms]]
-  cmd: INFO | ON | OFF | DEFAULT | EVERY | RESET | FACTOR | EVENTS | TIMER
+  cmd: INFO | ON | OFF | DEFAULT | EVERY | RESET | ADJUST | AUTOOFF | EVENTS | TIMER
   DEFAULT ON|OFF
   EVERY <seconds>
-  FACTOR [V|A|W [<factor>]]
+  ADJUST [V|A|W [<measured value>]]
+  AUTOOFF <milliamps> <cycles>
   TIMER <n> [<arg> [<arg> [...]]]
     n: 1..16
     arg: ACTIVE|INACTIVE|ON|OFF|DAILY|WORKDAYS|WEEKEND|<day>|<hh24>:<mm>|CLEAR
@@ -44,12 +45,12 @@ Next comes a command. If you omit it, ``INFO`` will be taken as the default.
 
 #### INFO
 This command reads out all Modbus registers the sockets are providing and will print the contents in interpreted form.
-On Gosund devices, in addition to the basic switch data the power meter data is printed.
+On devices with power meter, in addition to the basic switch data the power meter data is printed.
 If ``TIMERS`` is activated, a list of the 16 timers will be added.
 ```
 micha@LinuxBox:~/MBtools$ Smartdose Gosund03
 Using 192.168.178.52:502:1
-Gosund device| Telnet server| Modbus server| Fauxmo server (Alexa)| Timers| Default: ON
+Power meter| Telnet server| Modbus server| Fauxmo server (Alexa)| Timers| Default: ON
 Running since    0:40:25
 ON time          0:23:40
 ON  (255) for    0:40:25
@@ -57,6 +58,7 @@ accumulated         0.00 kWh
 Power               0.00 W
 Voltage           230.72 V
 Current             0.00 A
+Auto power OFF  0.00 A for 0 turns
 Timer  1: ACT  ON 18:05 SUN MON TUE WED THU FRI SAT
 Timer  2: ACT OFF 21:50 SUN MON TUE WED THU FRI SAT
 Timer  3:     OFF 00:00
@@ -78,10 +80,10 @@ The first line gives the full descriptor the program has built from the entered 
 The next lists the attributes the device has set - of course the Modbus server is listed here - else nothing would be read!
 The next three lines give the switch statistics - run time since last reboot, time spent in ON state and the time the current state (``ON`` in the example) is active.
 
-Please note that with Gosund devices the last two are different, since the ``ON time`` only is counted if power consumption is measured, while the current state is counted for the time the switch being electrically ON or OFF.
+Please note that with power meter devices the last two are different, since the ``ON time`` only is counted if power consumption is measured, while the current state is counted for the time the switch being electrically ON or OFF.
 Maxcio and Sonoff devices have no power meter, hence will have both times identical.
 
-The next four lines are shown for Gosund devices only and are showing the current values of the power meter.
+The next five lines are shown for power meter devices only and are showing the current values of the power meter.
 
 Finally the 16 timers are listed. In the example, only timers 1, 2, 7 and 11 have been programmed, timer 7 is set inactive.
 
@@ -95,7 +97,7 @@ Example output for a Gosund device again:
 ```
 micha@LinuxBox:~/Smartdose$ ./Smartdose Gosund04 EVERY 10
 Using 192.168.178.54:502:1
-Gosund device Telnet server Modbus server Default: ON
+Power meter | Telnet server | Modbus server | Default: ON
 Running since   48:05:50
 ON time          0:00:50
 OFF (  0) for   27:00:05
@@ -103,6 +105,7 @@ accumulated         0.01 kWh
 Power               0.00 W
 Voltage           231.64 V
 Current             0.00 A
+Auto power OFF  0.00 A for 0 turns
 Loop:   Run time     ON time  now      since        kWh           W           V           A
    1:   48:06:00     0:00:50  OFF   27:00:15       0.01        0.00      231.47        0.00
    2:   48:06:10     0:00:50  OFF   27:00:25       0.01        0.00      231.47        0.00
@@ -120,14 +123,14 @@ The DEFAULT command takes one argument out of ON or OFF and will set the boot sw
 A device set to DEFAULT ON will switch the power on upon a reboot or power loss.
 
 #### RESET
-Gosund devices are accumulating the consumed power in a register.
+Power meter devices are accumulating the consumed power in a register.
 To start from scratch, with the RESET command you can have this register set to zero again.
 
-#### FACTOR, FACTOR V|A|W [value]
-The FACTOR command is used to read or set the internal measurement correction factors the Gosund devices are maintaining.
-Used without any additional parameter, FACTOR will print out the current correction factor values:
+#### ADJUST, ADJUST V|A|W [measured_value]
+The ADJUST command is used to read or set the internal measurement correction factors the power meter devices are maintaining.
+Used without any additional parameter, ADJUST will print out the current correction factor values:
 ```
-micha@LinuxBox:~/Smartdose$ ./Smartdose Gosund02 FACTOR
+micha@LinuxBox:~/Smartdose$ ./Smartdose Gosund02 ADJUST
 Using 192.168.178.51:502:1
 Correction factors:
 V:    1.02000
@@ -138,9 +141,9 @@ If you would like to change these factors, you will have to name the value you a
 
 Without any further value, the command will reset the respective correction factor to 1.0:
 ```
-micha@LinuxBox:~/Smartdose$ ./Smartdose Gosund02 FACTOR W 
+micha@LinuxBox:~/Smartdose$ ./Smartdose Gosund02 ADJUST W 
 Using 192.168.178.51:502:1
-micha@LinuxBox:~/Smartdose$ ./Smartdose Gosund02 FACTOR
+micha@LinuxBox:~/Smartdose$ ./Smartdose Gosund02 ADJUST
 Using 192.168.178.51:502:1
 Correction factors:
 V:    1.02000
@@ -148,11 +151,11 @@ A:    1.75000
 W:    1.00000
 ```
 
-To set a specific value, you have to add it behind the category letter:
+To set a specific factor, you have to add a measured value behind the category letter:
 ```
-micha@LinuxBox:~/Smartdose$ ./Smartdose Gosund02 FACTOR W 1.04
+micha@LinuxBox:~/Smartdose$ ./Smartdose Gosund02 ADJUST W 62.4
 Using 192.168.178.51:502:1
-micha@LinuxBox:~/Smartdose$ ./Smartdose Gosund02 FACTOR
+micha@LinuxBox:~/Smartdose$ ./Smartdose Gosund02 ADJUST
 Using 192.168.178.51:502:1
 Correction factors:
 V:    1.02000
@@ -175,6 +178,23 @@ default on           16:48
 button off           16:49
 Modbus on            16:49
 ```
+
+#### AUTOOFF <milliams> <cycles>
+The power meter devices can be instructed to automatically switch off if the current was below a threshold for a given time.
+Reasoning behind that function is: if you have a power consuming target connected, but wish to have it completely off after it has done its work,
+in most cases the current will drop in idle state.
+
+Smartdose devices with a power meter will track the current if it is below ``milliamps`` mA for at least ``cycles`` measurements.
+The latter translates to a time, as measurements are taken every 5s by default.
+
+A command like 
+```
+micha@LinuxBox:~$ Smartdose pool autooff 100 12
+Using 192.168.178.42:502:1
+```
+will order the Smartdose to switch off, if the current was below 100mA for one minute (12 * 5 = 60 seconds).
+
+Setting one or both parameters to zero will disable the feature.
 
 #### TIMER <n>
 The ``TIMER`` command is the way to display and alter the timers' programs.
