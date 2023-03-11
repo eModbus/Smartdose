@@ -212,9 +212,9 @@ uint16_t aoCount = 0;            // Variable to track the number of matching mea
 
 // WiFi reconnect definitions
 WiFiEventHandler wifiDisconnectHandler;
+bool WiFiNeedsReconnect = false;
 
 // Some forward declarations
-bool Debouncer(bool raw);
 void SetState(uint8_t device_id, const char * device_name, bool state, uint8_t value);
 void SetState_F(uint8_t device_id, const char * device_name, bool state, uint8_t value);
 void wifiSetup(const char *hostname);
@@ -418,12 +418,12 @@ void registerEvent(S_EVENT ev) {
 #endif
 
 // -----------------------------------------------------------------------------
-// WiFi disconnect handler
+// WiFi handlers
 // -----------------------------------------------------------------------------
 void onWifiDisconnect(const WiFiEventStationModeDisconnected& event) {
   registerEvent(WIFI_DISCONN);
   WiFi.disconnect();
-  wifiSetup(DEVNAME);
+  WiFiNeedsReconnect = true;
 }
 
 // -----------------------------------------------------------------------------
@@ -440,15 +440,28 @@ void wifiSetup(const char *hostname) {
     WiFi.hostname(hostname);
   }
 
+  wifiDisconnectHandler = WiFi.onStationModeDisconnected(onWifiDisconnect);
+
   // Connect
   WiFi.begin(C_SSID, C_PWD);
 
   // Wait for connection. ==> We will hang here in RUN mode forever without a WiFi!
+  uint32_t ReDo = 0;
   while (WiFi.status() != WL_CONNECTED) {
     SignalLed.update();
+    // Count attempts
+    ReDo++;
+    // Had we more than 480 (2 minutes)?
+    if (ReDo >= 480) {
+      // Yes, start over
+      registerEvent(WIFI_LOST);
+      WiFi.disconnect();
+      delay(50);
+      WiFi.begin(C_SSID, C_PWD);
+      ReDo = 0;
+    }
     delay(250);
   }
-  wifiDisconnectHandler = WiFi.onStationModeDisconnected(onWifiDisconnect);
 
   myIP = WiFi.localIP();
   
@@ -457,7 +470,12 @@ void wifiSetup(const char *hostname) {
     MDNS.begin(hostname);
   }
 
+  // Fix connection for automatic recovery
+  // WiFi.setAutoReconnect(true);
+  WiFi.persistent(true);  
+
   registerEvent(WIFI_CONN);
+  WiFiNeedsReconnect = false;
 
   // Connected! Stop blinking
   SignalLed.stop();
@@ -1092,6 +1110,11 @@ void loop() {
 
   // RUN mode?
   if (mode == RUN) {
+    // Check if WiFi was lost
+    if (WiFiNeedsReconnect) {
+      wifiSetup(DEVNAME);
+    }
+
 #if FAUXMO_ACTIVE == 1
     // YES. Check Hue requests.
     fauxmo.handle();
@@ -1169,13 +1192,6 @@ void loop() {
         if (measures[CURRENT].measured > 0.0)
 #endif
         onTime.count(); 
-      }
-
-      // Check WiFi connection
-      if (WiFi.status() != WL_CONNECTED) {
-        // No connection - reconnect
-        registerEvent(WIFI_LOST);
-        wifiSetup(DEVNAME);
       }
 
 #if TELNET_LOG == 1
