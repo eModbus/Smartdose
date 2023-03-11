@@ -80,7 +80,7 @@ void usage(const char *msg) {
   cout << "  EVERY <seconds>" << endl;
   cout << "  ADJUST [V|A|W [<measured value>]]" << endl;
   cout << "  AUTOOFF <milliamps> <cycles>" << endl;
-  cout << "  TIMER <n> [<arg> [<arg> [...]]]" << endl;
+  cout << "  TIMER [<n> [<arg> [<arg> [...]]]]" << endl;
   cout << "    n: 1..16" << endl;
   cout << "    arg: ACTIVE|INACTIVE|ON|OFF|DAILY|WORKDAYS|WEEKEND|<day>|<hh24>:<mm>|CLEAR" << endl;
   cout << "    day: SUN|MON|TUE|WED|THU|FRI|SAT" << endl;
@@ -318,34 +318,6 @@ int main(int argc, char **argv) {
             }
           }
         }
-        if (basicData.flags & 0x0800) {
-          addr = 23; 
-          words = 32;
-          offs = 3;
-          response = MBclient.syncRequest(3, targetServer, READ_HOLD_REGISTER, addr, words);
-          err = response.getError();
-          if (err!=SUCCESS) {
-            handleError(err, 3);
-          } else {
-            for (uint8_t i = 0; i < 16; i++) {
-              offs = response.get(offs, timerData[i].activeDays);
-              offs = response.get(offs, timerData[i].onOff);
-              offs = response.get(offs, timerData[i].hour);
-              offs = response.get(offs, timerData[i].minute);
-            }
-           
-            if (loopCnt == 0) {
-              for (uint8_t i = 0; i < 16; i++) {
-                printTimer(i + 1, timerData[i]);
-              }
-            } else {
-            }
-          }
-        } else {
-          if (interval) {
-            cout << endl;
-          }
-        }
         sleep(interval);
         loopCnt++;
       } while (interval);
@@ -556,35 +528,34 @@ int main(int argc, char **argv) {
 // --------- Set timer parameters -----------------
   case TIMR:
     {
-      // Check arguments
-      uint8_t subcmd = 99;
-      uint8_t tim = 99;
-      if (argc > 3) {
-//      Get timer number
-        tim = atoi(argv[3]);
-        if (tim < 1 || tim > 16) {
-          usage("TIMER number must be 1..16!");
-          return -1;
-        }
-//      We have one. Now we need to read the timer data
-        tim--;
-        subcmd = 1;  // info for now.
+      // Issue a request for the flag word
+      uint16_t addr = 2;
+      uint16_t words = 1;
+      uint16_t offs = 3;
 
-        // Issue a request for the flag word
-        uint16_t addr = 2;
-        uint16_t words = 1;
-        uint16_t offs = 3;
-
-        ModbusMessage response = MBclient.syncRequest(14, targetServer, READ_HOLD_REGISTER, addr, words);
-        Error err = response.getError();
-        if (err!=SUCCESS) {
-          handleError(err, 14);
-        } else {
-          offs = response.get(offs, basicData.flags);
-        }
-//      Do we have timers at all?
-        if (basicData.flags & 0x0800) {
-//        Yes. Read timer data
+      ModbusMessage response = MBclient.syncRequest(14, targetServer, READ_HOLD_REGISTER, addr, words);
+      Error err = response.getError();
+      if (err!=SUCCESS) {
+        handleError(err, 14);
+      } else {
+        offs = response.get(offs, basicData.flags);
+      }
+//    Do we have timers at all?
+      if (basicData.flags & 0x0800) {
+//      Yes. Check arguments
+        uint8_t subcmd = 99;
+        uint8_t tim = 99;
+//      At least one?
+        if (argc > 3) {
+//        Get timer number
+          tim = atoi(argv[3]);
+          if (tim < 1 || tim > 16) {
+            usage("TIMER number must be 1..16!");
+            return -1;
+          }
+//        We have one. Now we need to read the timer data
+          tim--;
+          subcmd = 1;  // info for now.
           addr = 23 + tim * 2;
           words = 2;
           offs = 3;
@@ -736,12 +707,29 @@ int main(int argc, char **argv) {
           } 
           printTimer(tim + 1, timerData[0]);
         } else {
-          usage("TIMER: device has no timer function!");
-          return -1;
-        }
-      } 
-      if (subcmd == 99) {
-        usage("TIMER requires a timer number at least!");
+//        Output only
+          addr = 23; 
+          words = 32;
+          offs = 3;
+          response = MBclient.syncRequest(3, targetServer, READ_HOLD_REGISTER, addr, words);
+          err = response.getError();
+          if (err!=SUCCESS) {
+            handleError(err, 3);
+          } else {
+            for (uint8_t i = 0; i < 16; i++) {
+              offs = response.get(offs, timerData[i].activeDays);
+              offs = response.get(offs, timerData[i].onOff);
+              offs = response.get(offs, timerData[i].hour);
+              offs = response.get(offs, timerData[i].minute);
+            }
+           
+            for (uint8_t i = 0; i < 16; i++) {
+              printTimer(i + 1, timerData[i]);
+            }
+          }
+        } 
+      } else {
+        usage("TIMER: device has no timer function!");
         return -1;
       }
     }

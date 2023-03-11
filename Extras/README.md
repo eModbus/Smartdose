@@ -16,7 +16,7 @@ Usage: Smartdose host[:port[:serverID]]] [cmd [cmd_parms]]
   EVERY <seconds>
   ADJUST [V|A|W [<measured value>]]
   AUTOOFF <milliamps> <cycles>
-  TIMER <n> [<arg> [<arg> [...]]]
+  TIMER [<n> [<arg> [<arg> [...]]]]
     n: 1..16
     arg: ACTIVE|INACTIVE|ON|OFF|DAILY|WORKDAYS|WEEKEND|<day>|<hh24>:<mm>|CLEAR
     day: SUN|MON|TUE|WED|THU|FRI|SAT
@@ -59,22 +59,7 @@ Power               0.00 W
 Voltage           230.72 V
 Current             0.00 A
 Auto power OFF  0.00 A for 0 turns
-Timer  1: ACT  ON 18:05 SUN MON TUE WED THU FRI SAT
-Timer  2: ACT OFF 21:50 SUN MON TUE WED THU FRI SAT
-Timer  3:     OFF 00:00
-Timer  4:     OFF 00:00
-Timer  5:     OFF 00:00
-Timer  6:     OFF 00:00
-Timer  7:     OFF 23:59 SUN SAT
-Timer  8:     OFF 00:00
-Timer  9:     OFF 00:00
-Timer 10:     OFF 00:00
-Timer 11: ACT  ON 07:30 WED
-Timer 12:     OFF 00:00
-Timer 13:     OFF 00:00
-Timer 14:     OFF 00:00
-Timer 15:     OFF 00:00
-Timer 16:     OFF 00:00
+
 ```
 The first line gives the full descriptor the program has built from the entered target description.
 The next lists the attributes the device has set - of course the Modbus server is listed here - else nothing would be read!
@@ -196,7 +181,28 @@ will order the Smartdose to switch off, if the current was below 100mA for one m
 
 Setting one or both parameters to zero will disable the feature.
 
-#### TIMER <n>
+#### TIMER 
+If used without a timer number, the command will print out all timers the device currently has:
+```
+Timer  1: ACT  ON 18:05 SUN MON TUE WED THU FRI SAT
+Timer  2: ACT OFF 21:50 SUN MON TUE WED THU FRI SAT
+Timer  3:     OFF 00:00
+Timer  4:     OFF 00:00
+Timer  5:     OFF 00:00
+Timer  6:     OFF 00:00
+Timer  7:     OFF 23:59 SUN SAT
+Timer  8:     OFF 00:00
+Timer  9:     OFF 00:00
+Timer 10:     OFF 00:00
+Timer 11: ACT  ON 07:30 WED
+Timer 12:     OFF 00:00
+Timer 13:     OFF 00:00
+Timer 14:     OFF 00:00
+Timer 15:     OFF 00:00
+Timer 16:     OFF 00:00
+```
+
+##### TIMER <n>
 The ``TIMER`` command is the way to display and alter the timers' programs.
 ``TIMER`` will need further sub-parameters to control its actions. The number ``n`` of the timer to be handled is mandatory in any case.
 ``n`` can be in the range 1..16 only.
