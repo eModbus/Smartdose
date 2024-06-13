@@ -115,9 +115,9 @@ Register addresses 1 to 8 are available on any device, regardless of type, where
 | 11, 12   | Voltage correction factor       | (Yes, see below)|
 | 13, 14   | Current correction factor       | (Yes, see below)|
 | 15, 16   | Power correction factor         | (Yes, see below)|
-| 17, 18   | Current power consumption (W)   |                |
+| 17, 18   | Current current level (A)       |                |
 | 19, 20   | Current voltage level (V)       |                |
-| 21, 22   | Current current level (A)       |                |
+| 21, 22   | Current power consumption (W)   |                |
 |----------|---------------------------------|----------------|
 | 23, 24   | Timer 1 data (see above)        | Yes            |
 | 25, 26   | Timer 2 data                    | Yes            |
