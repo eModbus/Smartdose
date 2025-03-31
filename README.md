@@ -1,3 +1,7 @@
+# Important note
+
+This repository is maintained on [Codeberg only](https://codeberg.org/Miq19/Smartdose) and will be left as is today (Mar 31, 2025).
+
 ## Firmware for Gosund SP1, Sonoff S26 (R2) and Maxcio W-DE004 smart plugs
 
 This is a standalone firmware for the named smart plugs/sockets, supporting:
